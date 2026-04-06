@@ -1,0 +1,60 @@
+# =========================================
+# CONFIGURAÇÃO DO SISTEMA ANTI-FURTO
+# =========================================
+
+camera:
+  id: 0
+  width: 640
+  height: 480
+  fps: 30
+  backend: CAP_DSHOW
+
+runtime:
+  frame_skip: 2
+  cache_result: true
+  debug: false
+
+detector:
+  type: onnx
+  mmpose:
+    model_name: rtmpose-m_8xb256-420e_coco-256x192
+    device: cpu
+  onnx:
+    # https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/rtmo-m_16xb16-600e_body7-640x640-39e78cc4_20231211.zip
+    model_path: ./models/end2end.onnx
+    use_gpu: true
+
+activities:
+  - enabled: true
+    plugin: Atividades_Suspeitas.velocity_detector:VelocityDetector
+    params:
+      velocidade_maxima: 200.0
+
+  - enabled: true
+    plugin: Atividades_Suspeitas.posture_detector:PostureDetector
+    params:
+      agachamento_threshold: 0.6
+      tempo_minimo: 5
+
+alerts:
+  handlers:
+    - enabled: true
+      plugin: Alertas.alert_system:AlertSystem
+      params:
+        pasta_alertas: ./alertas
+        save_json: true
+        verbose: true
+
+visualization:
+  enabled: true
+  show_skeleton_canvas: true
+  confidence_threshold: 0.3
+  window_name: ANTI-FURTO
+  colors:
+    line: [0, 255, 255]
+    point: [0, 255, 0]
+    canvas_line: [0, 0, 255]
+    canvas_point: [0, 200, 0]
+    text: [0, 255, 0]
+    warning: [0, 0, 255]
+    muted: [200, 200, 200]

@@ -1,0 +1,12 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env_anti_furto/
+mmpose_fix/
+
+# Runtime output
+Alertas/eventos_*.json
