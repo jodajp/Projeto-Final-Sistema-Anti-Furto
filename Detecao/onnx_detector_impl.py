@@ -37,7 +37,11 @@ class ONNXDetectorImpl:
             available = ort.get_available_providers()
             
             if platform.system() == 'Windows':
-                if 'DmlExecutionProvider' in available:
+                if 'CUDAExecutionProvider' in available:
+                    device = 'cuda'
+                    print(f"  [ONNX] Usando CUDA")
+            
+                elif 'DmlExecutionProvider' in available:
                     device = 'winml'  # Use DirectML on Windows
                     print(f"  [ONNX] Usando WinML/DirectML")
                     print(f"  [ONNX] Adicionando suporte DirectML/WinML ao rtmlib...")
@@ -47,9 +51,6 @@ class ONNXDetectorImpl:
                         rtmlib_base.RTMLIB_SETTINGS['onnxruntime']['winml'] = 'DmlExecutionProvider'
                         print(f"  [OK] WinML/DirectML configurado em rtmlib")
 
-                elif 'CUDAExecutionProvider' in available:
-                    device = 'cuda'
-                    print(f"  [ONNX] Usando CUDA")
             else:
                 if 'CUDAExecutionProvider' in available:
                     device = 'cuda'

@@ -1,6 +1,6 @@
 
 numpy==2.4.4
-onnxruntime-directml==1.24.4
+
 opencv-contrib-python==4.13.0.92
 opencv-python==4.11.0.86
 opendatalab==0.0.10
@@ -9,17 +9,15 @@ openxlab==0.1.3
 
 
 torch==2.4.1
-torch-directml==0.2.5.dev240914
 torchvision==0.19.1
+torch-directml==0.2.5.dev240914
 
-
-mmcv-lite==2.1.0
-mmdet==3.3.0
-mmengine==0.10.7
-mmpose==1.3.2
+# Dependencias opcionais para o MMDetection e MMPOSE
+#mmcv-lite==2.1.0
+#mmdet==3.3.0
+#mmengine==0.10.7
+#mmpose==1.3.2
 
 rtmlib==0.0.15
 
-
 onnxruntime-directml==1.24.4
-
