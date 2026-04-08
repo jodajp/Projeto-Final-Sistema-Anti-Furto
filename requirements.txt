@@ -20,4 +20,5 @@ torchvision==0.19.1
 
 rtmlib==0.0.15
 
+flask==3.1.3
 

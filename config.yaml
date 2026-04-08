@@ -7,7 +7,7 @@ camera:
   width: 640
   height: 480
   fps: 30
-  backend: CAP_V4L2
+  backend: CAP_ANY
 
 runtime:
   frame_skip: 2
