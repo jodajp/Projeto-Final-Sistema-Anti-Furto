@@ -3,7 +3,7 @@ import sys
 import time
 import cv2
 import numpy as np
-from flask import Flask, request
+from flask import Flask, request, render_template
 from flask_socketio import SocketIO, emit
 # Adiciona a raiz do projeto ao PATH
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,89 +21,7 @@ sessions = {}
 
 @app.route('/')
 def index():
-    return """
-    <html>
-        <head>
-            <title>Sistema Anti-Furto</title>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.1/socket.io.js"></script>
-        </head>
-        <body style="text-align: center; background-color: #333; color: white;">
-            <h1>Sistema Anti-Furto - Monitorização pelo Browser</h1>
-            
-            <video id="webcam_video" autoplay playsinline style="display:none;"></video>
-
-            <canvas id="hidden_canvas" style="display:none;"></canvas>
-            
-            <!-- Imagem Final com a renderização dos alertas -->
-            <img id="processed_img" width="800" style="border: 2px solid white;" />
-            <br>
-            <button id="start-btn" style="padding: 10px; margin-top:20px;">Iniciar Transmissão</button>
-            <button id="stop-btn" style="padding: 10px; margin-top:20px; display: none;">Parar</button>
-            
-            <script>
-                const socket = io();
-                const video = document.getElementById('webcam_video');
-                const canvas = document.getElementById('hidden_canvas');
-                const ctx = canvas.getContext('2d');
-                const img = document.getElementById('processed_img');
-                const startBtn = document.getElementById('start-btn');
-                
-                let streamIniciado = false;
-                let localStream = null;
-                let aguardandoResposta = false; // Controlo de fluxo
-
-                startBtn.onclick = async () => {
-                    try {
-                        localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-                        video.srcObject = localStream;
-                        video.play();
-                        streamIniciado = true;
-                        startBtn.style.display = 'none';
-
-                        video.onloadedmetadata = () => {
-                            canvas.width = 640; 
-                            canvas.height = 480;
-                            enviarFrame(); // Inicia o ciclo
-                        };
-                    } catch (err) {
-                        alert("Erro na câmara: " + err);
-                    }
-                };
-
-                function enviarFrame() {
-                    if (!streamIniciado) return;
-
-                    // Se o servidor ainda está a processar o frame anterior, não enviamos um novo (evita lag)
-                    if (!aguardandoResposta) {
-                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                        
-                        // Converte para Binário (Blob) em vez de String Base64
-                        canvas.toBlob((blob) => {
-                            socket.emit('frame', blob);
-                            aguardandoResposta = true; 
-                        }, 'image/jpeg', 0.7);
-                    }
-                    
-                    // Mantém os 10-15 FPS, mas respeita o tempo de resposta do servidor
-                    setTimeout(enviarFrame, 100); 
-                }
-
-                // Recebe o buffer binário e converte para URL de imagem
-                socket.on('response_frame', (data) => {
-                    const blob = new Blob([data], { type: 'image/jpeg' });
-                    const url = URL.createObjectURL(blob);
-                    
-                    // Liberta a memória da URL anterior para não crashar o browser
-                    const oldUrl = img.src;
-                    img.src = url;
-                    if (oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
-                    
-                    aguardandoResposta = false;
-                });
-            </script>
-        </body>
-    </html>
-    """
+    return render_template('index.html')
 
 def get_orchestrator(sid):
     if sid not in sessions:
@@ -114,6 +32,14 @@ def get_orchestrator(sid):
 @socketio.on('disconnect')
 def handle_disconnect():
     if request.sid in sessions:
+        # Tentar libertar os recursos da memória/GPU
+        orchestrator = sessions[request.sid]
+        if hasattr(orchestrator, 'cleanup'):
+            try:
+                orchestrator.cleanup()
+            except Exception as e:
+                print(f"[ERRO] Falha ao limpar recursos do orchestrator: {e}")
+                
         del sessions[request.sid]
         print(f"[INFO] Sessão limpa para: {request.sid}")
 
@@ -123,9 +49,13 @@ def handle_frame(binary_frame):
     orchestrator = get_orchestrator(sid)
     metrics = orchestrator.metrics
 
-    # Converter bytes diretamente para imagem OpenCV (Muito mais rápido que Base64)
-    np_arr = np.frombuffer(binary_frame, np.uint8)
-    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    # Converter bytes diretamente para imagem OpenCV e tratar possíveis erros
+    try:
+        np_arr = np.frombuffer(binary_frame, np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    except Exception as e:
+        print(f"[ERRO] Falha ao descodificar a imagem: {e}")
+        return
 
     if frame is None:
         return
