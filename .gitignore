@@ -1,3 +1,8 @@
+# Ignore all files in the Data directory
+Visualizar_Data/Data/*
+Visualizar_Data/Output/*
+Visualizar_Data/Manifests/*
+
 # Python cache/artifacts
 __pycache__/
 *.py[cod]
