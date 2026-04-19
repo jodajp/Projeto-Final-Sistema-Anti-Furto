@@ -58,3 +58,23 @@ visualization:
     text: [0, 255, 0]
     warning: [0, 0, 255]
     muted: [200, 200, 200]
+
+temporal_filtering:
+  enabled: true
+  smoothing_factor: 0.6                      # EMA factor for slow/normal movements
+  smoothing_factor_fast: 0.85                # EMA factor for rapid movements (shoplifting grabs)
+  rapid_movement_threshold: 5.0              # px/frame threshold to trigger fast mode
+  velocity_smoothing: 0.3                    # EMA factor for velocity smoothing
+  occlusion_confidence_threshold: 0.3        # Threshold below which keypoint is occluded
+  max_occlusion_frames: 5                    # Max frames to predict during occlusion
+  velocity_damping: 0.94                     # Velocity decay during occlusion (0.94 = 6% loss/frame)
+
+spatial_normalization:
+  enabled: true
+  torso_confidence_threshold: 0.5
+  min_torso_length_px: 10.0
+  allow_invalid_torso: false
+  visualization:
+    debug_mode: true
+    canvas_size: 500
+    show_labels: true
