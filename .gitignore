@@ -7,6 +7,8 @@ __pycache__/
 venv/
 env_anti_furto/
 mmpose_fix/
+venv_tracking/
+
 
 # Runtime output
 Alertas/eventos_*.json
