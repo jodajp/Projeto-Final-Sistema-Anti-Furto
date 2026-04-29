@@ -124,17 +124,34 @@ class AntiTheftOrchestrator:
 
                     for scrs, kpts in zip(lista_scores, lista_kpts):
                         if len(kpts) >= 17: # Só aceita pessoas com corpo completo
+                            
+                            # 1. Encontrar os limites do esqueleto
                             x_min, y_min = np.min(kpts, axis=0)
                             x_max, y_max = np.max(kpts, axis=0)
+                            
+                            # 2. Adicionar margem (padding) para a caixa cobrir o corpo inteiro
+                            margem_x = 25
+                            margem_y = 35
+                            
+                            # 3. Limitar a matemática às bordas do ecrã (0 a 640x480)
+                            x_min = max(0, x_min - margem_x)
+                            y_min = max(0, y_min - margem_y)
+                            x_max = min(frame.shape[1], x_max + margem_x) 
+                            y_max = min(frame.shape[0], y_max + margem_y) 
+                            
                             score_medio = float(np.mean(scrs)) if len(scrs) > 0 else 1.0
                             bboxes_com_scores.append([x_min, y_min, x_max, y_max, score_medio, 0.0])
 
                     # Dar todas as caixas ao ByteTrack de uma só vez para ele distribuir os IDs
                     if bboxes_com_scores:
                         detections_array = torch.tensor(bboxes_com_scores, dtype=torch.float32)
+                        
+                        res_altura = frame.shape[0] # 480
+                        res_largura = frame.shape[1] # 640
+                        
                         self.last_tracked_objects = self.tracker.update(
                             detections_array, 
-                            [frame.shape[0], frame.shape[1]]
+                            [res_altura, res_largura] 
                         )
                     else:
                         self.last_tracked_objects = []
@@ -147,7 +164,7 @@ class AntiTheftOrchestrator:
                 keypoints, scores = self.last_detection
                 alert_text = None
                 
-                # RECONSTRUIR LISTAS PARA AVALIAÇÃO DE ATIVIDADES 
+                # --- 2. O SISTEMA DE BLINDAGEM VISUAL (Bypass ao Tracker) ---
                 kpts_array = np.array(keypoints) if keypoints else np.array([])
                 lista_kpts = []
                 lista_scores = []
@@ -160,64 +177,76 @@ class AntiTheftOrchestrator:
                         lista_kpts = kpts_array
                         lista_scores = scores if scores else [[] for _ in range(len(kpts_array))]
 
-                #AVALIAR AS ATIVIDADES PARA CADA PESSOA SEPARADAMENTE
-                for i, (scrs, kpts) in enumerate(zip(lista_scores, lista_kpts)):
+                # A. Construir as tuas caixas perfeitas intocáveis
+                pessoas_originais = []
+                for scrs, kpts in zip(lista_scores, lista_kpts):
                     if len(kpts) >= 17:
+                        x_min, y_min = np.min(kpts, axis=0)
+                        x_max, y_max = np.max(kpts, axis=0)
                         
-                        # Convertemos as matrizes de volta para listas normais antes 
-                        # de as entregar ao motor de atividades para ele não estoirar!
-                        kpts_lista = kpts.tolist()
-                        scrs_lista = scrs.tolist() if hasattr(scrs, 'tolist') else list(scrs)
+                        # A tua margem perfeita
+                        x1 = int(max(0, x_min - 25))
+                        y1 = int(max(0, y_min - 35))
+                        x2 = int(min(frame.shape[1], x_max + 25))
+                        y2 = int(min(frame.shape[0], y_max + 35))
                         
-                        for activity in self.activities:
-                            event = activity.detecta(
-                                kpts_lista,
-                                scrs_lista,
-                                self.metrics.frame_count,
-                                timestamp,
-                            )
-                            if event:
-                                self.alert_dispatcher.dispatch(event)
-                                alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
+                        pessoas_originais.append({
+                            'kpts': kpts.tolist(),
+                            'scrs': scrs.tolist() if hasattr(scrs, 'tolist') else list(scrs),
+                            'box': (x1, y1, x2, y2),
+                            'center_x': (x1 + x2) / 2
+                        })
 
-                                # --- PAYLOAD JSON PARA A BASE DE DADOS ---
-                                pessoa_id = "Desconhecido"
-                                if i < len(self.last_tracked_objects):
-                                    alvo = self.last_tracked_objects[i]
-                                    # O nosso tradutor de Objetos vs Matrizes
-                                    if hasattr(alvo, 'track_id'):
-                                        pessoa_id = alvo.track_id
-                                    else:
-                                        pessoa_id = int(alvo[4])
+                # B. Extrair apenas os IDs do tracker ignorando o lixo matemático dele
+                objetos_tracker = []
+                for obj in self.last_tracked_objects:
+                    if hasattr(obj, 'track_id'):
+                        track_id = obj.track_id
+                        tx1, tx2 = float(obj.tlbr[0]), float(obj.tlbr[2])
+                    else:
+                        tx1, tx2 = float(obj[0]), float(obj[2])
+                        track_id = int(obj[4])
+                    objetos_tracker.append({'id': track_id, 'center_x': (tx1 + tx2) / 2})
 
-                                relatorio_db = {
-                                    "timestamp": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp)),
-                                    "track_id": pessoa_id,
-                                    "tipo_alerta": event.tipo,
-                                    "confianca": round(event.confianca * 100, 2)
-                                }
+                # C. Ordenar ambos da esquerda para a direita para casar o ID correto
+                pessoas_originais.sort(key=lambda p: p['center_x'])
+                objetos_tracker.sort(key=lambda t: t['center_x'])
 
-                                payload = json.dumps(relatorio_db)
-                                print(f"\n[PAYLOAD PARA A CLOUD] -> {payload}\n")
+                for i, pessoa in enumerate(pessoas_originais):
+                    pessoa['id'] = objetos_tracker[i]['id'] if i < len(objetos_tracker) else "Desconhecido"
+
+                # --- 3. AVALIAR ATIVIDADES E CRIAR JSON ---
+                for pessoa in pessoas_originais:
+                    for activity in self.activities:
+                        event = activity.detecta(
+                            pessoa['kpts'],
+                            pessoa['scrs'],
+                            self.metrics.frame_count,
+                            timestamp,
+                        )
+                        if event:
+                            self.alert_dispatcher.dispatch(event)
+                            alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
+
+                            relatorio_db = {
+                                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp)),
+                                "track_id": pessoa['id'],
+                                "tipo_alerta": event.tipo,
+                                "confianca": round(event.confianca * 100, 2)
+                            }
+                            payload = json.dumps(relatorio_db)
+                            print(f"\n[PAYLOAD PARA A CLOUD] -> {payload}\n")
 
                 output = self.renderer.render(frame, keypoints, scores)
 
-                # --- 4. DESENHAR A CAIXA E O ID ---
-                if len(self.last_tracked_objects) > 0:
-                    for obj in self.last_tracked_objects:
-                        
-                        # A TUA BLINDAGEM VISUAL
-                        if hasattr(obj, 'track_id'):
-                            track_id = obj.track_id
-                            x1, y1, x2, y2 = map(int, obj.tlbr)
-                        else:
-                            # Extrair da Matriz (x1, y1, x2, y2, id)
-                            x1, y1, x2, y2 = int(obj[0]), int(obj[1]), int(obj[2]), int(obj[3])
-                            track_id = int(obj[4])
-                        
-                        cv2.rectangle(output, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                        cv2.putText(output, f"ID: {track_id}", (x1, max(0, y1 - 10)), 
-                                    cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2)
+                # --- 4. DESENHAR AS CAIXAS PERFEITAS NO ECRÃ ---
+                for pessoa in pessoas_originais:
+                    x1, y1, x2, y2 = pessoa['box']
+                    track_id = pessoa['id']
+                    
+                    cv2.rectangle(output, (x1 // 2, y1 // 2), (x2 // 2, y2 // 2), (0, 255, 0), 3)
+                    cv2.putText(output, f"ID: {track_id}", (x1, max(0, y1 - 10)), 
+                                cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2)
 
                 info_lines = self._build_info_lines(had_new_inference=should_infer)
                 self.renderer.draw_overlay(
