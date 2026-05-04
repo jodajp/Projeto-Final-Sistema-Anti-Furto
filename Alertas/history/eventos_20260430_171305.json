@@ -1,0 +1,128 @@
+[
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565586.3866544,
+    "timestamp_legivel": "2026-04-30T17:13:06.386654",
+    "confianca": 0.4192003951591502,
+    "frame_id": 6,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 5 frames",
+    "dados": {
+      "razao": 0.5807996048408498,
+      "threshold": 0.6,
+      "frames_agachado": 5
+    }
+  },
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565586.7117295,
+    "timestamp_legivel": "2026-04-30T17:13:06.711730",
+    "confianca": 0.4192003951591502,
+    "frame_id": 7,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 6 frames",
+    "dados": {
+      "razao": 0.5807996048408498,
+      "threshold": 0.6,
+      "frames_agachado": 6
+    }
+  },
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565586.7210474,
+    "timestamp_legivel": "2026-04-30T17:13:06.721047",
+    "confianca": 0.42020655333694745,
+    "frame_id": 8,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 7 frames",
+    "dados": {
+      "razao": 0.5797934466630525,
+      "threshold": 0.6,
+      "frames_agachado": 7
+    }
+  },
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565587.0953913,
+    "timestamp_legivel": "2026-04-30T17:13:07.095391",
+    "confianca": 0.42020655333694745,
+    "frame_id": 9,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 8 frames",
+    "dados": {
+      "razao": 0.5797934466630525,
+      "threshold": 0.6,
+      "frames_agachado": 8
+    }
+  },
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565587.1068137,
+    "timestamp_legivel": "2026-04-30T17:13:07.106814",
+    "confianca": 0.42095977564365616,
+    "frame_id": 10,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 9 frames",
+    "dados": {
+      "razao": 0.5790402243563438,
+      "threshold": 0.6,
+      "frames_agachado": 9
+    }
+  },
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565587.4574447,
+    "timestamp_legivel": "2026-04-30T17:13:07.457445",
+    "confianca": 0.42095977564365616,
+    "frame_id": 11,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 10 frames",
+    "dados": {
+      "razao": 0.5790402243563438,
+      "threshold": 0.6,
+      "frames_agachado": 10
+    }
+  },
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565587.4687462,
+    "timestamp_legivel": "2026-04-30T17:13:07.468746",
+    "confianca": 0.42178699453952384,
+    "frame_id": 12,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 11 frames",
+    "dados": {
+      "razao": 0.5782130054604762,
+      "threshold": 0.6,
+      "frames_agachado": 11
+    }
+  },
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565587.790616,
+    "timestamp_legivel": "2026-04-30T17:13:07.790616",
+    "confianca": 0.42178699453952384,
+    "frame_id": 13,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 12 frames",
+    "dados": {
+      "razao": 0.5782130054604762,
+      "threshold": 0.6,
+      "frames_agachado": 12
+    }
+  },
+  {
+    "tipo": "agachamento",
+    "timestamp": 1777565587.8014495,
+    "timestamp_legivel": "2026-04-30T17:13:07.801450",
+    "confianca": 0.42219459112058344,
+    "frame_id": 14,
+    "pessoa_id": null,
+    "descricao": "Agachamento detectado por 13 frames",
+    "dados": {
+      "razao": 0.5778054088794166,
+      "threshold": 0.6,
+      "frames_agachado": 13
+    }
+  }
+]
