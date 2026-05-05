@@ -3,7 +3,7 @@ import time
 import cv2
 import numpy as np
 
-from Detecao.detector_factory import create_detector
+from Edge.Detecao.detector_factory import create_detector
 from .activity_loader import load_activities
 from .alert_dispatcher import AlertDispatcher, load_alert_handlers
 from .metrics import PipelineMetrics

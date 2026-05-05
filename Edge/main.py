@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from pipeline import AppConfig, ConfigError
+from Edge.pipeline import AppConfig, ConfigError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,7 +27,7 @@ def main() -> int:
         config = AppConfig.from_file(args.config)
         config.apply_cli_overrides(args)
 
-        from pipeline.orchestrator import AntiTheftOrchestrator
+        from Edge.pipeline.orchestrator import AntiTheftOrchestrator
 
         orchestrator = AntiTheftOrchestrator(config)
         orchestrator.run()

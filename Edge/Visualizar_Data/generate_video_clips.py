@@ -32,7 +32,7 @@ import cv2
 import argparse
 import random
 from tqdm import tqdm
-from visualize import draw_skeleton, rotate_keypoints_90_ccw
+from Edge.Visualizar_Data.visualize import draw_skeleton, rotate_keypoints_90_ccw
 
 # ==================== Configuration ====================
 
