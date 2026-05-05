@@ -42,8 +42,7 @@ class AntiTheftOrchestrator:
         self.tracker = BYTETracker(
             track_thresh=0.5, 
             track_buffer=30, 
-            match_thresh=0.8, 
-            #mot20=False
+            match_thresh=0.8
         )
         self.last_tracked_objects = []
 
@@ -232,7 +231,6 @@ class AntiTheftOrchestrator:
                             self.alert_dispatcher.dispatch(event)
                             alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
 
-                            # --- AQUI ENTRA A BASE DE DADOS ---
                             # Guardamos os dados de forma limpa
                             self.db.salvar_alerta(
                                 track_id=pessoa['id'],
@@ -240,7 +238,6 @@ class AntiTheftOrchestrator:
                                 confianca=event.confianca * 100 # Guardamos como percentagem 0-100
                             )
 
-                            # Manter o teu print para debug se quiseres
                             print(f"[DB] Registado: ID {pessoa['id']} a fazer {event.tipo}")
 
                 output = self.renderer.render(frame, keypoints, scores)

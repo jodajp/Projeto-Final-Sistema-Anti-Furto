@@ -41,7 +41,7 @@ alerts:
     - enabled: true
       plugin: Alertas.alert_system:AlertSystem
       params:
-        pasta_alertas: ./alertas
+        pasta_alertas: ./alertas/history
         save_json: true
         verbose: true
 

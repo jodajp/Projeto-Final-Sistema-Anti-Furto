@@ -53,7 +53,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "enabled": True,
                 "plugin": "Alertas.alert_system:AlertSystem",
                 "params": {
-                    "pasta_alertas": "./alertas",
+                    "pasta_alertas": "./alertas/history",
                     "save_json": True,
                     "verbose": True,
                 },
