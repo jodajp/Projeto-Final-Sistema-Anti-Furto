@@ -75,6 +75,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "muted": [200, 200, 200],
         },
     },
+    "temporal_filtering": {
+        "enabled": True,
+        "smoothing_factor": 0.6,
+        "smoothing_factor_fast": 0.85,
+        "rapid_movement_threshold": 5.0,
+        "velocity_smoothing": 0.3,
+        "occlusion_confidence_threshold": 0.3,
+        "max_occlusion_frames": 5,
+        "velocity_damping": 0.94,
+    },
 }
 
 
@@ -162,6 +172,9 @@ class AppConfig:
     def apply_cli_overrides(self, args):
         detector = self.data["detector"]
 
+        if getattr(args, "source", None) is not None:
+            self.data["camera"]["id"] = args.source
+        
         if getattr(args, "backend", None):
             detector["type"] = args.backend
 
@@ -215,3 +228,8 @@ class AppConfig:
 
     def alert_specs(self) -> List[Dict[str, Any]]:
         return self.data["alerts"].get("handlers", [])
+
+    def temporal_filter_config(self) -> Dict[str, Any]:
+        """Get temporal filtering configuration."""
+        return self.data.get("temporal_filtering", {})
+

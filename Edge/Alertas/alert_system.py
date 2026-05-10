@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 from typing import List
 from pathlib import Path
-from Atividades_Suspeitas.base_activity import SuspiciousEvent
+from Edge.Atividades_Suspeitas.base_activity import SuspiciousEvent
 
 class AlertSystem:
     """Sistema centralizado de alertas."""

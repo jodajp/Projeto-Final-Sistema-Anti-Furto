@@ -2,13 +2,17 @@
 
 import argparse
 import sys
+import os
 
-from pipeline import AppConfig, ConfigError
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from Edge.pipeline import AppConfig, ConfigError
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sistema Anti-Furto (modular)")
     parser.add_argument("--config", default="config.yaml", help="Caminho do arquivo YAML")
+    parser.add_argument("--source", help="Fonte de vídeo: ID da câmara (ex: 0) ou caminho do ficheiro (ex: video.mp4)")
     parser.add_argument("--backend", choices=["mmpose", "onnx"], help="Seleciona backend")
     parser.add_argument("--model", help="Modelo MMPose (quando backend=mmpose)")
     parser.add_argument("--model-path", help="Caminho do modelo ONNX (quando backend=onnx)")
@@ -26,7 +30,7 @@ def main() -> int:
         config = AppConfig.from_file(args.config)
         config.apply_cli_overrides(args)
 
-        from pipeline.orchestrator import AntiTheftOrchestrator
+        from Edge.pipeline.orchestrator import AntiTheftOrchestrator
 
         orchestrator = AntiTheftOrchestrator(config)
         orchestrator.run()

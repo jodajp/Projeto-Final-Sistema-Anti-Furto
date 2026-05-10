@@ -1,0 +1,39 @@
+services:
+  api_backend:
+    build: 
+      context: ./Backend  
+    ports:
+      - "8000:8000"            
+    networks:
+      - rede_cluster              
+    depends_on:
+      - base_dados                
+
+  dashboard_frontend:
+    build: 
+      context: ./dashboard-antifurto 
+    ports:
+      - "8080:80"                
+    networks:
+      - rede_cluster
+
+  base_dados:
+    image: postgres:15-alpine     
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: antifurto_db
+    ports:
+      - "5432:5432"
+    networks:
+      - rede_cluster
+    volumes:
+      - dados_postgres:/var/lib/postgresql/data 
+
+
+networks:
+  rede_cluster:
+    driver: bridge
+
+volumes:
+  dados_postgres:

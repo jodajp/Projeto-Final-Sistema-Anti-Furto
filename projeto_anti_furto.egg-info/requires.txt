@@ -1,0 +1,6 @@
+
+[edge]
+opencv-python>=4.8.0
+mmpose>=1.1.0
+onnxruntime>=1.16.0
+pyyaml>=6.0
