@@ -26,6 +26,13 @@ detector:
 
 activities:
   - enabled: true
+    plugin: Atividades_Suspeitas.shoplifting_detector:ShopliftingActivityDetector
+    params:
+      model_path: ./models/activity_classifier.pth
+      seq_length: 45
+      threshold: 0.50
+      cooldown_frames: 45
+  - enabled: true
     plugin: Atividades_Suspeitas.velocity_detector:VelocityDetector
     params:
       velocidade_maxima: 200.0

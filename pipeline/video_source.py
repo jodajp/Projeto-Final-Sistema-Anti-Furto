@@ -7,11 +7,16 @@ class VideoSource:
 
     def open(self):
         source = self.config.get("id", 0)
-        if isinstance(source, str) and source.isdigit():
-            source = int(source)
-
+        
         backend_name = self.config.get("backend", "CAP_DSHOW")
         backend = getattr(cv2, backend_name, cv2.CAP_DSHOW)
+
+        if isinstance(source, str):
+            if source.isdigit():
+                source = int(source)
+            else:
+                # It is a video file path, use default ANY backend
+                backend = cv2.CAP_ANY
 
         cap = cv2.VideoCapture(source, backend)
 

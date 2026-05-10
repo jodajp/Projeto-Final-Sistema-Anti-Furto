@@ -118,7 +118,7 @@ class ONNXDetectorImpl:
             # scores shape = (num_people, 17)
             
             # Remove low-confidence detections per frame
-            valid_mask = scores.mean(axis=1) > 0.3  # Filter persons with avg confidence < 0.3
+            valid_mask = scores.mean(axis=1) > 0.05  # Filter persons with avg confidence < 0.05
             keypoints = keypoints[valid_mask]
             scores = scores[valid_mask]
             
