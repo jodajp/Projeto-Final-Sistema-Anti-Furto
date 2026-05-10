@@ -172,6 +172,9 @@ class AppConfig:
     def apply_cli_overrides(self, args):
         detector = self.data["detector"]
 
+        if getattr(args, "source", None) is not None:
+            self.data["camera"]["id"] = args.source
+        
         if getattr(args, "backend", None):
             detector["type"] = args.backend
 

@@ -43,6 +43,12 @@ activities:
       agachamento_threshold: 0.6
       tempo_minimo: 5
 
+  - enabled: true
+    plugin: Atividades_Suspeitas.hand_proximity_detector:HandProximityDetector
+    params:
+      distancia_maxima: 150.0  
+      tempo_minimo: 10
+
 alerts:
   handlers:
     - enabled: true
