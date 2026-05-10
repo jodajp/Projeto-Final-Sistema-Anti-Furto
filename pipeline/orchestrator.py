@@ -8,7 +8,7 @@ from .activity_loader import load_activities
 from .alert_dispatcher import AlertDispatcher, load_alert_handlers
 from .metrics import PipelineMetrics
 from .renderer import PoseRenderer
-from .video_source import VideoSource
+from .video_source import create_video_source
 from .spatial_normalizer import SpatialNormalizer, NormalizationParams
 from .skeleton_visualizer import SkeletonVisualizer
 from .temporal_pose_filter import TemporalPoseFilter, TemporalPoseFilterConfig
@@ -29,7 +29,7 @@ class AntiTheftOrchestrator:
         self.alert_dispatcher = AlertDispatcher(handlers)
 
         self.renderer = PoseRenderer(config.visualization())
-        self.video_source = VideoSource(config.camera())
+        self.video_source = create_video_source(config.camera())
         self.metrics = PipelineMetrics(frame_skip=config.frame_skip())
 
         self.cache_result = bool(self.runtime_config.get("cache_result", True))
