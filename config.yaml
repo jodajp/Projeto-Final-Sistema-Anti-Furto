@@ -91,3 +91,18 @@ spatial_normalization:
     debug_mode: true
     canvas_size: 500
     show_labels: true
+
+# Phase 4: sequence classification (shoplifting vs normal)
+phase4:
+  sequence_length: 30
+  input_size: 34
+  hidden_size: 128
+  num_layers: 1
+  attention_size: 64
+  dropout: 0.1
+  learning_rate: 0.001
+  batch_size: 16
+  epochs: 30
+  weight_decay: 0.0
+  confidence_weighted_loss: true
+  device: null
