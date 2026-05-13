@@ -9,8 +9,8 @@ class VideoSource:
         if isinstance(source, str) and source.isdigit():
             source = int(source)
 
-        backend_name = self.config.get("backend", "CAP_ANY")
-        backend = getattr(cv2, backend_name, cv2.CAP_ANY)
+        backend_name = self.config.get("backend", "CAP_DSHOW")
+        backend = getattr(cv2, backend_name, cv2.CAP_DSHOW)
 
         cap = cv2.VideoCapture(source, backend)
 
