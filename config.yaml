@@ -3,11 +3,11 @@
 # =========================================
 
 camera:
-  id: "cobaia.mp4"
+  id: 0
   width: 640
   height: 480
   fps: 30
-  backend: CAP_ANY
+  backend: CAP_DSHOW
 
 runtime:
   frame_skip: 2
@@ -41,7 +41,7 @@ alerts:
     - enabled: true
       plugin: Alertas.alert_system:AlertSystem
       params:
-        pasta_alertas: ./alertas/history
+        pasta_alertas: ./Edge/Alertas/history
         save_json: true
         verbose: true
 
@@ -58,3 +58,7 @@ visualization:
     text: [0, 255, 0]
     warning: [0, 0, 255]
     muted: [200, 200, 200]
+  bbox_padding:
+    x: 25
+    y: 35
+  default_class_id: 0.0

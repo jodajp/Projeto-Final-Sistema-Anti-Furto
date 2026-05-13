@@ -10,4 +10,4 @@ mmpose_fix/
 venv_tracking/
 
 # Runtime output
-Alertas/eventos_*.json
+Alertas/history/eventos_*.json

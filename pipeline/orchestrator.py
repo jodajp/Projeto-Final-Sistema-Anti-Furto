@@ -59,7 +59,8 @@ class AntiTheftOrchestrator:
         print("=" * 60 + "\n")
 
     def _build_info_lines(self, had_new_inference: bool):
-        keypoint_count = len(self.last_detection[0]) if self.last_detection else 0
+        keypoints_ref = self.last_detection[0]
+        keypoint_count = len(keypoints_ref) if keypoints_ref is not None else 0
         inference_state = "NEW" if had_new_inference else "CACHED"
 
         return [
@@ -83,6 +84,87 @@ class AntiTheftOrchestrator:
         print("=" * 60)
         self.alert_dispatcher.print_summary()
 
+    def _preparar_entidades(self, keypoints, scores, frame_shape):
+        """Calcula bboxes e normaliza dados para 0, 1 ou N pessoas sem erros de ambiguidade."""
+        if keypoints is None or scores is None or len(keypoints) == 0:
+            return []
+        
+        # ndmin trata a escala automaticamente (0, 1 ou N pessoas)
+        kpts_arr = np.array(keypoints, ndmin=3)
+        scrs_arr = np.array(scores, ndmin=2)
+
+        if kpts_arr.size == 0 or kpts_arr.shape[-1] != 2:
+            return []
+
+        viz_cfg = self.config.visualization()
+        padding = viz_cfg.get('bbox_padding', {'x': 25, 'y': 35})
+        conf_min = viz_cfg.get('confidence_threshold', 0.3)
+        class_id = viz_cfg.get('default_class_id', 0.0)
+
+        entidades = []
+        for scrs, kpts in zip(scrs_arr, kpts_arr):
+            mask = scrs > conf_min
+            if not np.any(mask): continue 
+
+            kpts_vis = kpts[mask]
+            x_min, y_min = np.min(kpts_vis, axis=0)/2
+            x_max, y_max = np.max(kpts_vis, axis=0)/2
+
+            x1 = int(max(0, x_min - padding['x']))
+            y1 = int(max(0, y_min - padding['y']))
+            x2 = int(min(frame_shape[1], x_max + padding['x']))
+            y2 = int(min(frame_shape[0], y_max + padding['y']))
+
+            entidades.append({
+                'kpts': kpts.tolist(),
+                'scrs': scrs.tolist(),
+                'box': [x1, y1, x2, y2, float(np.mean(scrs[mask])), class_id],
+                'center_x': (x1 + x2) / 2,
+                'id': "Desconhecido"
+            })
+        return entidades
+
+    def _atribuir_ids(self, entidades):
+        """Cruza os IDs do ByteTrack com as bboxes originais por posição horizontal."""
+        if not entidades or self.last_tracked_objects is None or len(self.last_tracked_objects) == 0:
+            return
+
+        objetos_tracker = []
+        for obj in self.last_tracked_objects:
+            if hasattr(obj, 'track_id'):
+                track_id = obj.track_id
+                tx1, tx2 = float(obj.tlbr[0]), float(obj.tlbr[2])
+            else:
+                tx1, tx2, track_id = float(obj[0]), float(obj[2]), int(obj[4])
+            objetos_tracker.append({'id': track_id, 'center_x': (tx1 + tx2) / 2})
+
+        entidades.sort(key=lambda e: e['center_x'])
+        objetos_tracker.sort(key=lambda t: t['center_x'])
+
+        for i, entidade in enumerate(entidades):
+            if i < len(objetos_tracker):
+                entidade['id'] = objetos_tracker[i]['id']
+
+    def _processar_atividades(self, entidades, timestamp):
+        """Executa a lógica de detecção de furto e grava na base de dados SQLite."""
+        alert_text = None
+        for ent in entidades:
+            for activity in self.activities:
+                event = activity.detecta(ent['kpts'], ent['scrs'], self.metrics.frame_count, timestamp)
+                if event:
+                    self.alert_dispatcher.dispatch(event)
+                    alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
+                    self.db.salvar_alerta(ent['id'], event.tipo, event.confianca * 100)
+        return alert_text
+
+    def _desenhar_caixas(self, frame, entidades):
+        """Desenha bboxes e IDs no frame final."""
+        for ent in entidades:
+            x1, y1, x2, y2, _, _ = ent['box']
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f"ID: {ent['id']}", (x1, max(0, y1 - 10)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
     def run(self):
         self._print_startup()
         cap = self.video_source.open()
@@ -90,185 +172,49 @@ class AntiTheftOrchestrator:
         try:
             while True:
                 ret, frame = cap.read()
-                if not ret:
-                    break
+                if not ret: break
+                if self.metrics.frame_count == 0:
+                    print(f"[VIDEO] Resolução Real: {frame.shape[1]}x{frame.shape[0]}")
 
                 self.metrics.on_frame()
                 timestamp = time.time()
 
+                # 1. INFERÊNCIA OU CACHE
                 should_infer = (self.metrics.frame_count % self.metrics.frame_skip) == 0
                 if should_infer:
                     t0 = time.time()
-                    detection = self.detector.detect(frame)
-                    keypoints, scores = [], []
-                    if isinstance(detection, tuple) and len(detection) == 2:
-                        if detection[0] is not None:
-                            keypoints = list(detection[0])
-                        if detection[1] is not None:
-                            scores = list(detection[1])
+                    keypoints, scores = self.detector.detect(frame)
                     self.last_inference_ms = (time.time() - t0) * 1000.0
-
                     self.metrics.on_inference(self.last_inference_ms)
                     self.last_detection = (keypoints, scores)
+                else:
+                    keypoints, scores = self.last_detection
 
-                    bboxes_com_scores = []
-                    kpts_array = np.array(keypoints) if keypoints else np.array([])
-                    lista_kpts = []
-                    lista_scores = []
+                # 2. PROCESSAMENTO ÚNICO (Reciclagem de código)
+                entidades = self._preparar_entidades(keypoints, scores, frame.shape)
 
-                    # Separar as pessoas (Quer haja 1 pessoa ou 10 pessoas na loja)
-                    if kpts_array.size > 0:
-                        if len(kpts_array.shape) == 2: # Só 1 pessoa detetada
-                            lista_kpts = [kpts_array]
-                            lista_scores = [scores] if scores else [[]]
-                        elif len(kpts_array.shape) == 3: # Várias pessoas detetadas
-                            lista_kpts = kpts_array
-                            lista_scores = scores if scores else [[] for _ in range(len(kpts_array))]
-
-                    for scrs, kpts in zip(lista_scores, lista_kpts):
-                        if len(kpts) >= 17: # Só aceita pessoas com corpo completo
-                            
-                            # 1. Encontrar os limites do esqueleto
-                            x_min, y_min = np.min(kpts, axis=0)
-                            x_max, y_max = np.max(kpts, axis=0)
-                            
-                            # 2. Adicionar margem (padding) para a caixa cobrir o corpo inteiro
-                            margem_x = 25
-                            margem_y = 35
-                            
-                            # 3. Limitar a matemática às bordas do ecrã (0 a 640x480)
-                            x_min = max(0, x_min - margem_x)
-                            y_min = max(0, y_min - margem_y)
-                            x_max = min(frame.shape[1], x_max + margem_x) 
-                            y_max = min(frame.shape[0], y_max + margem_y) 
-                            
-                            score_medio = float(np.mean(scrs)) if len(scrs) > 0 else 1.0
-                            bboxes_com_scores.append([x_min, y_min, x_max, y_max, score_medio, 0.0])
-
-                    # Dar todas as caixas ao ByteTrack de uma só vez para ele distribuir os IDs
-                    if bboxes_com_scores:
-                        detections_array = torch.tensor(bboxes_com_scores, dtype=torch.float32)
-                        
-                        res_altura = frame.shape[0] # 480
-                        res_largura = frame.shape[1] # 640
-                        
-                        self.last_tracked_objects = self.tracker.update(
-                            detections_array, 
-                            [res_altura, res_largura] 
-                        )
+                # 3. ATUALIZAÇÃO DO TRACKER
+                if should_infer:
+                    if entidades:
+                        # Extrai apenas as bboxes validadas para o tracker
+                        bboxes = torch.tensor([e['box'] for e in entidades], dtype=torch.float32)
+                        self.last_tracked_objects = self.tracker.update(bboxes, frame.shape[:2])
+                        self.metrics.on_detection()
                     else:
                         self.last_tracked_objects = []
 
-                    if keypoints:
-                        self.metrics.on_detection()
-                elif not self.cache_result:
-                    self.last_detection = ([], [])
+                # 4. CASAMENTO DE IDS E LÓGICA
+                self._atribuir_ids(entidades)
+                alert_text = self._processar_atividades(entidades, timestamp)
 
-                keypoints, scores = self.last_detection
-                alert_text = None
-                
-                # --- 2. O SISTEMA DE BLINDAGEM VISUAL (Bypass ao Tracker) ---
-                kpts_array = np.array(keypoints) if keypoints else np.array([])
-                lista_kpts = []
-                lista_scores = []
-
-                if kpts_array.size > 0:
-                    if len(kpts_array.shape) == 2:
-                        lista_kpts = [kpts_array]
-                        lista_scores = [scores] if scores else [[]]
-                    elif len(kpts_array.shape) == 3:
-                        lista_kpts = kpts_array
-                        lista_scores = scores if scores else [[] for _ in range(len(kpts_array))]
-
-                # A. Construir as tuas caixas perfeitas intocáveis
-                pessoas_originais = []
-                for scrs, kpts in zip(lista_scores, lista_kpts):
-                    if len(kpts) >= 17:
-                        x_min, y_min = np.min(kpts, axis=0)
-                        x_max, y_max = np.max(kpts, axis=0)
-                        
-                        # A tua margem perfeita
-                        x1 = int(max(0, x_min - 25))
-                        y1 = int(max(0, y_min - 35))
-                        x2 = int(min(frame.shape[1], x_max + 25))
-                        y2 = int(min(frame.shape[0], y_max + 35))
-                        
-                        pessoas_originais.append({
-                            'kpts': kpts.tolist(),
-                            'scrs': scrs.tolist() if hasattr(scrs, 'tolist') else list(scrs),
-                            'box': (x1, y1, x2, y2),
-                            'center_x': (x1 + x2) / 2
-                        })
-
-                # B. Extrair apenas os IDs do tracker ignorando o lixo matemático dele
-                objetos_tracker = []
-                for obj in self.last_tracked_objects:
-                    if hasattr(obj, 'track_id'):
-                        track_id = obj.track_id
-                        tx1, tx2 = float(obj.tlbr[0]), float(obj.tlbr[2])
-                    else:
-                        tx1, tx2 = float(obj[0]), float(obj[2])
-                        track_id = int(obj[4])
-                    objetos_tracker.append({'id': track_id, 'center_x': (tx1 + tx2) / 2})
-
-                # C. Ordenar ambos da esquerda para a direita para casar o ID correto
-                pessoas_originais.sort(key=lambda p: p['center_x'])
-                objetos_tracker.sort(key=lambda t: t['center_x'])
-
-                for i, pessoa in enumerate(pessoas_originais):
-                    pessoa['id'] = objetos_tracker[i]['id'] if i < len(objetos_tracker) else "Desconhecido"
-
-                # --- 3. AVALIAR ATIVIDADES E CRIAR JSON ---
-                for pessoa in pessoas_originais:
-                    for activity in self.activities:
-                        event = activity.detecta(
-                            pessoa['kpts'],
-                            pessoa['scrs'],
-                            self.metrics.frame_count,
-                            timestamp,
-                        )
-                        if event:
-                            self.alert_dispatcher.dispatch(event)
-                            alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
-
-                            # Guardamos os dados de forma limpa
-                            self.db.salvar_alerta(
-                                track_id=pessoa['id'],
-                                tipo_alerta=event.tipo,
-                                confianca=event.confianca * 100 # Guardamos como percentagem 0-100
-                            )
-
-                            print(f"[DB] Registado: ID {pessoa['id']} a fazer {event.tipo}")
-
+                # 5. RENDERIZAÇÃO FINAL
                 output = self.renderer.render(frame, keypoints, scores)
+                self._desenhar_caixas(output, entidades)
 
-                # --- 4. DESENHAR AS CAIXAS PERFEITAS NO ECRÃ ---
-                for pessoa in pessoas_originais:
-                    x1, y1, x2, y2 = pessoa['box']
-                    track_id = pessoa['id']
-                    
-                    cv2.rectangle(output, (x1 // 2, y1 // 2), (x2 // 2, y2 // 2), (0, 255, 0), 3)
-                    cv2.putText(output, f"ID: {track_id}", (x1, max(0, y1 - 10)), 
-                                cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2)
-
-                info_lines = self._build_info_lines(had_new_inference=should_infer)
-                self.renderer.draw_overlay(
-                    output,
-                    info_lines,
-                    alert_text=alert_text,
-                    debug=self.debug,
-                )
-
+                self.renderer.draw_overlay(output, self._build_info_lines(should_infer), alert_text, self.debug)
                 cv2.imshow(self.renderer.window_name, output)
 
-                key = cv2.waitKey(1) & 0xFF
-                if key in (ord("q"), ord("Q")):
-                    break
-                if key in (ord("d"), ord("D")):
-                    self.debug = not self.debug
-                    state = "ATIVADO" if self.debug else "DESATIVADO"
-                    print(f"[DEBUG] {state}")
-
+                if cv2.waitKey(1) & 0xFF in (ord("q"), ord("Q")): break
         finally:
             cap.release()
             cv2.destroyAllWindows()

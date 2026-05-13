@@ -1,6 +1,5 @@
 import cv2
 
-# Class para lidar com a fonte de vídeo agora penas camera, expansão para fotos ou vídeos pode ser feita futuramente
 class VideoSource:
     def __init__(self, config: dict):
         self.config = config
