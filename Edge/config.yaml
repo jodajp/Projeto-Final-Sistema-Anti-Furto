@@ -47,7 +47,7 @@ alerts:
     - enabled: true
       plugin: Alertas.alert_system:AlertSystem
       params:
-        pasta_alertas: ./alertas
+        pasta_alertas: ./Edge/Alertas/history
         save_json: true
         verbose: true
 
@@ -84,3 +84,7 @@ spatial_normalization:
     debug_mode: true
     canvas_size: 500
     show_labels: true
+  bbox_padding:
+    x: 25
+    y: 35
+  default_class_id: 0.0

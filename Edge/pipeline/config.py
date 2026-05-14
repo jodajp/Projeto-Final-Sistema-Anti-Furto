@@ -53,7 +53,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "enabled": True,
                 "plugin": "Alertas.alert_system:AlertSystem",
                 "params": {
-                    "pasta_alertas": "./alertas",
+                    "pasta_alertas": "./Edge/Alertas/history",
                     "save_json": True,
                     "verbose": True,
                 },
@@ -65,6 +65,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "show_skeleton_canvas": True,
         "confidence_threshold": 0.3,
         "window_name": "ANTI-FURTO",
+        "bbox_padding": {"x": 25, "y": 35},
+        "default_class_id": 0.0,
         "colors": {
             "line": [0, 255, 255],
             "point": [0, 255, 0],

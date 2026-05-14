@@ -1,8 +1,12 @@
+import os
 import time
-
+import json
 import cv2
 import numpy as np
+import torch
 
+from Alertas.database_handler import DatabaseHandler
+from bytetracker import BYTETracker
 from Edge.Detecao.detector_factory import create_detector
 from .activity_loader import load_activities
 from .alert_dispatcher import AlertDispatcher, load_alert_handlers
@@ -76,6 +80,15 @@ class AntiTheftOrchestrator:
         self.last_inference_ms = 0.0
         self.temporal_filter_applied = False
 
+        self.tracker = BYTETracker(
+            track_thresh=0.5, 
+            track_buffer=30, 
+            match_thresh=0.8
+        )
+        self.last_tracked_objects = []
+
+        self.db = DatabaseHandler()
+
     def _print_startup(self):
         print("\n" + "=" * 60)
         print("SISTEMA ANTI-FURTO - MODULAR PIPELINE")
@@ -115,6 +128,88 @@ class AntiTheftOrchestrator:
         print("=" * 60)
         self.alert_dispatcher.print_summary()
 
+    def _preparar_entidades(self, keypoints, scores, frame_shape):
+        """Calcula bboxes e normaliza dados para 0, 1 ou N pessoas sem erros de ambiguidade."""
+        if keypoints is None or scores is None or len(keypoints) == 0:
+            return []
+        
+        # ndmin trata a escala automaticamente (0, 1 ou N pessoas)
+        kpts_arr = np.array(keypoints, ndmin=3)
+        scrs_arr = np.array(scores, ndmin=2)
+
+        if kpts_arr.size == 0 or kpts_arr.shape[-1] != 2:
+            return []
+
+        viz_cfg = self.config.visualization()
+        padding = viz_cfg.get('bbox_padding', {'x': 25, 'y': 35})
+        conf_min = viz_cfg.get('confidence_threshold', 0.3)
+        class_id = viz_cfg.get('default_class_id', 0.0)
+
+        entidades = []
+        for scrs, kpts in zip(scrs_arr, kpts_arr):
+            mask = scrs > conf_min
+            if not np.any(mask): continue 
+
+            kpts_vis = kpts[mask]
+            x_min, y_min = np.min(kpts_vis, axis=0)/2
+            x_max, y_max = np.max(kpts_vis, axis=0)/2
+
+            x1 = int(max(0, x_min - padding['x']))
+            y1 = int(max(0, y_min - padding['y']))
+            x2 = int(min(frame_shape[1], x_max + padding['x']))
+            y2 = int(min(frame_shape[0], y_max + padding['y']))
+
+            entidades.append({
+                'kpts': kpts.tolist(),
+                'scrs': scrs.tolist(),
+                'box': [x1, y1, x2, y2, float(np.mean(scrs[mask])), class_id],
+                'center_x': (x1 + x2) / 2,
+                'id': "Desconhecido"
+            })
+        return entidades
+
+    def _atribuir_ids(self, entidades):
+        """Cruza os IDs do ByteTrack com as bboxes originais por posição horizontal."""
+        if not entidades or self.last_tracked_objects is None or len(self.last_tracked_objects) == 0:
+            return
+
+        objetos_tracker = []
+        for obj in self.last_tracked_objects:
+            if hasattr(obj, 'track_id'):
+                track_id = obj.track_id
+                tx1, tx2 = float(obj.tlbr[0]), float(obj.tlbr[2])
+            else:
+                tx1, tx2, track_id = float(obj[0]), float(obj[2]), int(obj[4])
+            objetos_tracker.append({'id': track_id, 'center_x': (tx1 + tx2) / 2})
+
+        entidades.sort(key=lambda e: e['center_x'])
+        objetos_tracker.sort(key=lambda t: t['center_x'])
+
+        for i, entidade in enumerate(entidades):
+            if i < len(objetos_tracker):
+                entidade['id'] = objetos_tracker[i]['id']
+
+    def _processar_atividades(self, entidades, timestamp):
+        """Executa a lógica de detecção de furto e grava na base de dados SQLite."""
+        alert_text = None
+        for ent in entidades:
+            for activity in self.activities:
+                event = activity.detecta(ent['kpts'], ent['scrs'], self.metrics.frame_count, timestamp)
+                if event:
+                    self.alert_dispatcher.dispatch(event)
+                    alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
+                    self.db.salvar_alerta(ent['id'], event.tipo, event.confianca * 100)
+        return alert_text
+
+    def _desenhar_caixas(self, frame, entidades):
+        """Desenha bboxes e IDs no frame final."""
+        for ent in entidades:
+            x1, y1, x2, y2, _, _ = ent['box']
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f"ID: {ent['id']}", (x1, max(0, y1 - 10)), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+
     def run(self):
         self._print_startup()
         cap = self.video_source.open()
@@ -122,8 +217,10 @@ class AntiTheftOrchestrator:
         try:
             while True:
                 ret, frame = cap.read()
-                if not ret:
-                    break
+                if not ret: break
+
+                if self.metrics.frame_count == 0:
+                    print(f"[VIDEO] Resolução Real: {frame.shape[1]}x{frame.shape[0]}")
 
                 self.metrics.on_frame()
                 timestamp = time.time()
@@ -131,13 +228,7 @@ class AntiTheftOrchestrator:
                 should_infer = (self.metrics.frame_count % self.metrics.frame_skip) == 0
                 if should_infer:
                     t0 = time.time()
-                    detection = self.detector.detect(frame)
-                    keypoints, scores = [], []
-                    if isinstance(detection, tuple) and len(detection) == 2:
-                        if detection[0] is not None:
-                            keypoints = list(detection[0])
-                        if detection[1] is not None:
-                            scores = list(detection[1])
+                    keypoints, scores = self.detector.detect(frame)
                     self.last_inference_ms = (time.time() - t0) * 1000.0
 
                     self.metrics.on_inference(self.last_inference_ms)
