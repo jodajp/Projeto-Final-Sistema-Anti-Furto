@@ -1,0 +1,282 @@
+[
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772453.9372783,
+    "timestamp_legivel": "2026-05-14T16:27:33.937278",
+    "confianca": 0.616239070892334,
+    "frame_id": 95,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 10 frames (Risco: 61.6%)",
+    "dados": {
+      "risco_ocultacao": 0.616239070892334,
+      "distancia_px": 57.56414031982422,
+      "frames_consecutivos": 10
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772454.0771565,
+    "timestamp_legivel": "2026-05-14T16:27:34.077157",
+    "confianca": 0.6691217422485352,
+    "frame_id": 96,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 11 frames (Risco: 66.9%)",
+    "dados": {
+      "risco_ocultacao": 0.6691217422485352,
+      "distancia_px": 49.63173294067383,
+      "frames_consecutivos": 11
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772454.2523584,
+    "timestamp_legivel": "2026-05-14T16:27:34.252358",
+    "confianca": 0.6691217422485352,
+    "frame_id": 97,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 12 frames (Risco: 66.9%)",
+    "dados": {
+      "risco_ocultacao": 0.6691217422485352,
+      "distancia_px": 49.63173294067383,
+      "frames_consecutivos": 12
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772454.3720202,
+    "timestamp_legivel": "2026-05-14T16:27:34.372020",
+    "confianca": 0.6883715391159058,
+    "frame_id": 98,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 13 frames (Risco: 68.8%)",
+    "dados": {
+      "risco_ocultacao": 0.6883715391159058,
+      "distancia_px": 46.7442741394043,
+      "frames_consecutivos": 13
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772454.5272236,
+    "timestamp_legivel": "2026-05-14T16:27:34.527224",
+    "confianca": 0.6883715391159058,
+    "frame_id": 99,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 14 frames (Risco: 68.8%)",
+    "dados": {
+      "risco_ocultacao": 0.6883715391159058,
+      "distancia_px": 46.7442741394043,
+      "frames_consecutivos": 14
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772454.6689277,
+    "timestamp_legivel": "2026-05-14T16:27:34.668928",
+    "confianca": 0.641366720199585,
+    "frame_id": 100,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 15 frames (Risco: 64.1%)",
+    "dados": {
+      "risco_ocultacao": 0.641366720199585,
+      "distancia_px": 53.79499816894531,
+      "frames_consecutivos": 15
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772454.835317,
+    "timestamp_legivel": "2026-05-14T16:27:34.835317",
+    "confianca": 0.641366720199585,
+    "frame_id": 101,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 16 frames (Risco: 64.1%)",
+    "dados": {
+      "risco_ocultacao": 0.641366720199585,
+      "distancia_px": 53.79499816894531,
+      "frames_consecutivos": 16
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772454.9614248,
+    "timestamp_legivel": "2026-05-14T16:27:34.961425",
+    "confianca": 0.6185733079910278,
+    "frame_id": 102,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 17 frames (Risco: 61.9%)",
+    "dados": {
+      "risco_ocultacao": 0.6185733079910278,
+      "distancia_px": 57.21400451660156,
+      "frames_consecutivos": 17
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772455.12725,
+    "timestamp_legivel": "2026-05-14T16:27:35.127250",
+    "confianca": 0.6185733079910278,
+    "frame_id": 103,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 18 frames (Risco: 61.9%)",
+    "dados": {
+      "risco_ocultacao": 0.6185733079910278,
+      "distancia_px": 57.21400451660156,
+      "frames_consecutivos": 18
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772455.252188,
+    "timestamp_legivel": "2026-05-14T16:27:35.252188",
+    "confianca": 0.5553669929504395,
+    "frame_id": 104,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 19 frames (Risco: 55.5%)",
+    "dados": {
+      "risco_ocultacao": 0.5553669929504395,
+      "distancia_px": 66.69495391845703,
+      "frames_consecutivos": 19
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772455.4275594,
+    "timestamp_legivel": "2026-05-14T16:27:35.427559",
+    "confianca": 0.5553669929504395,
+    "frame_id": 105,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 20 frames (Risco: 55.5%)",
+    "dados": {
+      "risco_ocultacao": 0.5553669929504395,
+      "distancia_px": 66.69495391845703,
+      "frames_consecutivos": 20
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772458.8452334,
+    "timestamp_legivel": "2026-05-14T16:27:38.845233",
+    "confianca": 0.5998245477676392,
+    "frame_id": 189,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 10 frames (Risco: 60.0%)",
+    "dados": {
+      "risco_ocultacao": 0.5998245477676392,
+      "distancia_px": 60.02631378173828,
+      "frames_consecutivos": 10
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772459.11289,
+    "timestamp_legivel": "2026-05-14T16:27:39.112890",
+    "confianca": 0.6005080938339233,
+    "frame_id": 190,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 11 frames (Risco: 60.1%)",
+    "dados": {
+      "risco_ocultacao": 0.6005080938339233,
+      "distancia_px": 59.92378616333008,
+      "frames_consecutivos": 11
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772459.2870586,
+    "timestamp_legivel": "2026-05-14T16:27:39.287059",
+    "confianca": 0.6005080938339233,
+    "frame_id": 191,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 12 frames (Risco: 60.1%)",
+    "dados": {
+      "risco_ocultacao": 0.6005080938339233,
+      "distancia_px": 59.92378616333008,
+      "frames_consecutivos": 12
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772459.4151871,
+    "timestamp_legivel": "2026-05-14T16:27:39.415187",
+    "confianca": 0.637382984161377,
+    "frame_id": 192,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 13 frames (Risco: 63.7%)",
+    "dados": {
+      "risco_ocultacao": 0.637382984161377,
+      "distancia_px": 54.392547607421875,
+      "frames_consecutivos": 13
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772459.5781956,
+    "timestamp_legivel": "2026-05-14T16:27:39.578196",
+    "confianca": 0.637382984161377,
+    "frame_id": 193,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 14 frames (Risco: 63.7%)",
+    "dados": {
+      "risco_ocultacao": 0.637382984161377,
+      "distancia_px": 54.392547607421875,
+      "frames_consecutivos": 14
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772459.7065768,
+    "timestamp_legivel": "2026-05-14T16:27:39.706577",
+    "confianca": 0.63804692029953,
+    "frame_id": 194,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 15 frames (Risco: 63.8%)",
+    "dados": {
+      "risco_ocultacao": 0.63804692029953,
+      "distancia_px": 54.29296112060547,
+      "frames_consecutivos": 15
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772459.8788564,
+    "timestamp_legivel": "2026-05-14T16:27:39.878856",
+    "confianca": 0.63804692029953,
+    "frame_id": 195,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 16 frames (Risco: 63.8%)",
+    "dados": {
+      "risco_ocultacao": 0.63804692029953,
+      "distancia_px": 54.29296112060547,
+      "frames_consecutivos": 16
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772460.003145,
+    "timestamp_legivel": "2026-05-14T16:27:40.003145",
+    "confianca": 0.6458529233932495,
+    "frame_id": 196,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 17 frames (Risco: 64.6%)",
+    "dados": {
+      "risco_ocultacao": 0.6458529233932495,
+      "distancia_px": 53.12206268310547,
+      "frames_consecutivos": 17
+    }
+  },
+  {
+    "tipo": "ocultacao_produto",
+    "timestamp": 1778772460.1869762,
+    "timestamp_legivel": "2026-05-14T16:27:40.186976",
+    "confianca": 0.6458529233932495,
+    "frame_id": 197,
+    "pessoa_id": null,
+    "descricao": "Poss\u00edvel oculta\u00e7\u00e3o: M\u00e3o pr\u00f3xima aos bolsos por 18 frames (Risco: 64.6%)",
+    "dados": {
+      "risco_ocultacao": 0.6458529233932495,
+      "distancia_px": 53.12206268310547,
+      "frames_consecutivos": 18
+    }
+  }
+]

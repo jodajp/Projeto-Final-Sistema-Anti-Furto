@@ -139,11 +139,12 @@ class AntiTheftOrchestrator:
         scrs_arr = np.array(scores, ndmin=2)
         h_img, w_img = frame_shape[:2]
 
-        # Use detector metadata when available; otherwise keep coordinates in frame space.
-        input_w = float(self.detector_info.get('input_width', w_img))
-        input_h = float(self.detector_info.get('input_height', h_img))
-        scale_x = (w_img / input_w) if input_w > 0 else 1.0
-        scale_y = (h_img / input_h) if input_h > 0 else 1.0
+        # DETECÇÃO DE ESCALA: Em vez de /2 fixo, calculamos o rácio real.
+        # Se os pontos vêm em 1280 e a imagem é 640, o scale será 0.5 (equivalente ao /2)
+        # Se a imagem for igual ao modelo, o scale será 1.0 (não estraga nada)
+        input_w = self.detector_info.get('input_width', w_img * 2 if "/2" else w_img) 
+        scale_x = w_img / input_w
+        scale_y = h_img / self.detector_info.get('input_height', h_img * 2 if "/2" else h_img)
 
         viz_cfg = self.config.visualization()
         padding = viz_cfg.get('bbox_padding', {'x': 25, 'y': 35})
@@ -238,20 +239,6 @@ class AntiTheftOrchestrator:
                 if should_infer:
                     t0 = time.time()
                     keypoints, scores = self.detector.detect(frame)
-                    if keypoints is None:
-                        keypoints = []
-                    elif hasattr(keypoints, "tolist"):
-                        keypoints = keypoints.tolist()
-                    else:
-                        keypoints = list(keypoints)
-
-                    if scores is None:
-                        scores = []
-                    elif hasattr(scores, "tolist"):
-                        scores = scores.tolist()
-                    else:
-                        scores = list(scores)
-
                     self.last_inference_ms = (time.time() - t0) * 1000.0
 
                     self.metrics.on_inference(self.last_inference_ms)
