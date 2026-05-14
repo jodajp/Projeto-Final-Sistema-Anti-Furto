@@ -1,11 +1,12 @@
-import cv2
 import os
 from abc import ABC, abstractmethod
+
+import cv2
 
 class BaseVideoSource(ABC):
     """Classe base abstrata para todas as fontes de vídeo."""
     @abstractmethod
-    def open(self):
+    def open(self) -> cv2.VideoCapture:
         pass
 
 class CameraSource(BaseVideoSource):
@@ -13,7 +14,7 @@ class CameraSource(BaseVideoSource):
     def __init__(self, config: dict):
         self.config = config
 
-    def open(self):
+    def open(self) -> cv2.VideoCapture:
         # Garante que o ID da câmara é um inteiro
         source = int(self.config.get("id", 0))
         backend_name = self.config.get("backend", "CAP_DSHOW")
@@ -41,7 +42,7 @@ class FileSource(BaseVideoSource):
     def __init__(self, config: dict):
         self.config = config
 
-    def open(self):
+    def open(self) -> cv2.VideoCapture:
         source = str(self.config.get("id", ""))
         # Não passamos backend nem forçamos resolução para proteger o codec
         cap = cv2.VideoCapture(source)

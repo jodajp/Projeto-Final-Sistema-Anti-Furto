@@ -241,15 +241,28 @@ class AntiTheftOrchestrator:
 
                 keypoints, scores = self.last_detection
 
+                entidades = self._preparar_entidades(keypoints, scores, frame.shape)
+
+                if should_infer:
+                    if entidades:
+                        bboxes = torch.tensor([e['box'] for e in entidades], dtype=torch.float32)
+                        self.last_tracked_objects = self.tracker.update(bboxes, frame.shape[:2])
+                        self.metrics.on_detection()
+                    else:
+                        self.last_tracked_objects = []
+
+                self._atribuir_ids(entidades)
+
                 # Apply temporal filtering for jitter reduction and occlusion prediction
-                if self.temporal_filter_enabled and keypoints:
+                temporal_filter = self.temporal_filter
+                if self.temporal_filter_enabled and temporal_filter is not None and keypoints:
                     try:
                         keypoints_array = np.array(keypoints, dtype=np.float32)
                         scores_array = np.array(scores, dtype=np.float32)
                         
                         # Ensure proper shape
                         if keypoints_array.shape == (17, 2) and scores_array.shape == (17,):
-                            filtered_kpts, filtered_scores, was_predicted = self.temporal_filter.filter_pose(
+                            filtered_kpts, filtered_scores, was_predicted = temporal_filter.filter_pose(
                                 keypoints_array, scores_array
                             )
                             keypoints = filtered_kpts.tolist()
@@ -260,20 +273,12 @@ class AntiTheftOrchestrator:
                             print(f"[TEMPORAL] Erro ao filtrar: {e}")
 
                 alert_text = None
-                if keypoints:
-                    for activity in self.activities:
-                        event = activity.detecta(
-                            keypoints,
-                            scores,
-                            self.metrics.frame_count,
-                            timestamp,
-                        )
-                        if event:
-                            self.alert_dispatcher.dispatch(event)
-                            alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
+                if entidades:
+                    alert_text = self._processar_atividades(entidades, timestamp)
 
                 output = self.renderer.render(frame, keypoints, scores)
                 info_lines = self._build_info_lines(had_new_inference=should_infer)
+                self._desenhar_caixas(output, entidades)
                 self.renderer.draw_overlay(
                     output,
                     info_lines,
@@ -284,15 +289,17 @@ class AntiTheftOrchestrator:
                 cv2.imshow(self.renderer.window_name, output)
 
                 # Render normalized skeleton if enabled
-                if self.spatial_norm_enabled and self.show_normalized and keypoints:
+                normalizer = self.normalizer
+                skeleton_viz = self.skeleton_viz
+                if self.spatial_norm_enabled and self.show_normalized and normalizer is not None and skeleton_viz is not None and keypoints:
                     try:
                         keypoints_array = np.array(keypoints, dtype=np.float32)
                         scores_array = np.array(scores, dtype=np.float32)
                         
-                        normalized = self.normalizer.normalize(keypoints_array, scores_array)
+                        normalized = normalizer.normalize(keypoints_array, scores_array)
                         
                         if normalized.is_valid:
-                            normalized_canvas = self.skeleton_viz.render(
+                            normalized_canvas = skeleton_viz.render(
                                 normalized.keypoints,
                                 normalized.scores,
                                 title=f"Frame {self.metrics.frame_count} | Torso: {normalized.torso_length:.1f}px"
@@ -330,7 +337,7 @@ class AntiTheftOrchestrator:
                     self.temporal_filter_enabled = not self.temporal_filter_enabled
                     state = "ATIVO" if self.temporal_filter_enabled else "INATIVO"
                     print(f"[TEMPORAL] Filtro {state}")
-                    if not self.temporal_filter_enabled:
+                    if not self.temporal_filter_enabled and self.temporal_filter is not None:
                         self.temporal_filter.reset()
 
         finally:
