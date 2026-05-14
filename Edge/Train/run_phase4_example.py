@@ -15,9 +15,9 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from pipeline.kinematic_features import KinematicFeatureExtractor
-from Train.phase4_types import Phase4Config
-from Train.phase4_model import Phase4Classifier
-from Train.train_phase4 import Trainer
+from Edge.Train.phase4_types import Phase4Config
+from Edge.Train.phase4_model import Phase4Classifier
+from Edge.Train.train_phase4 import Trainer
 
 
 class SyntheticPoseDataset(Dataset):
