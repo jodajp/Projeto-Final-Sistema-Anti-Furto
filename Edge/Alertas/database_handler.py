@@ -2,7 +2,7 @@ import sqlite3
 import time
 
 class DatabaseHandler:
-    def __init__(self, db_name="Edge/Alertas/database_manager.db"):
+    def __init__(self, db_name="./Alertas/database_manager.db"):
         """Inicializa a ligação e garante que a tabela existe."""
         self.db_name = db_name
         self.conn = sqlite3.connect(self.db_name, check_same_thread=False)

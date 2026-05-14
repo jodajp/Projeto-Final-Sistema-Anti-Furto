@@ -54,7 +54,7 @@ alerts:
     - enabled: true
       plugin: Alertas.alert_system:AlertSystem
       params:
-        pasta_alertas: ./Edge/Alertas/history
+        pasta_alertas: ./Alertas/history/
         save_json: true
         verbose: true
 
