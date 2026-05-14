@@ -3,13 +3,10 @@
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List
-
 import yaml
-
 
 class ConfigError(ValueError):
     """Erro de configuracao invalida."""
-
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "camera": {
@@ -77,7 +74,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "muted": [200, 200, 200],
         },
     },
-    "temporal_filtering": {
+    "temporal_filter": {
         "enabled": True,
         "smoothing_factor": 0.6,
         "smoothing_factor_fast": 0.85,
@@ -234,4 +231,3 @@ class AppConfig:
     def temporal_filter_config(self) -> Dict[str, Any]:
         """Get temporal filtering configuration."""
         return self.data.get("temporal_filtering", {})
-

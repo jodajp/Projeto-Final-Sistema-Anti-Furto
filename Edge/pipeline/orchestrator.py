@@ -89,6 +89,7 @@ class AntiTheftOrchestrator:
 
         self.db = DatabaseHandler()
 
+
     def _print_startup(self):
         print("\n" + "=" * 60)
         print("SISTEMA ANTI-FURTO - MODULAR PIPELINE")
@@ -136,35 +137,43 @@ class AntiTheftOrchestrator:
         # ndmin trata a escala automaticamente (0, 1 ou N pessoas)
         kpts_arr = np.array(keypoints, ndmin=3)
         scrs_arr = np.array(scores, ndmin=2)
+        h_img, w_img = frame_shape[:2]
 
-        if kpts_arr.size == 0 or kpts_arr.shape[-1] != 2:
-            return []
+        # Use detector metadata when available; otherwise keep coordinates in frame space.
+        input_w = float(self.detector_info.get('input_width', w_img))
+        input_h = float(self.detector_info.get('input_height', h_img))
+        scale_x = (w_img / input_w) if input_w > 0 else 1.0
+        scale_y = (h_img / input_h) if input_h > 0 else 1.0
 
         viz_cfg = self.config.visualization()
         padding = viz_cfg.get('bbox_padding', {'x': 25, 'y': 35})
         conf_min = viz_cfg.get('confidence_threshold', 0.3)
-        class_id = viz_cfg.get('default_class_id', 0.0)
 
         entidades = []
         for scrs, kpts in zip(scrs_arr, kpts_arr):
             mask = scrs > conf_min
             if not np.any(mask): continue 
 
-            kpts_vis = kpts[mask]
-            x_min, y_min = np.min(kpts_vis, axis=0)/2
-            x_max, y_max = np.max(kpts_vis, axis=0)/2
+            # Aplica a escala correctiva (O substituto profissional do /2)
+            kpts_scaled = kpts.copy()
+            kpts_scaled[:, 0] *= scale_x
+            kpts_scaled[:, 1] *= scale_y
 
-            x1 = int(max(0, x_min - padding['x']))
-            y1 = int(max(0, y_min - padding['y']))
-            x2 = int(min(frame_shape[1], x_max + padding['x']))
-            y2 = int(min(frame_shape[0], y_max + padding['y']))
+            kpts_vis = kpts_scaled[mask]
+            x_min, y_min = np.min(kpts_vis, axis=0)
+            x_max, y_max = np.max(kpts_vis, axis=0)
+
+            x1 = int(np.clip(x_min - padding['x'], 0, w_img))
+            y1 = int(np.clip(y_min - padding['y'], 0, h_img))
+            x2 = int(np.clip(x_max + padding['x'], 0, w_img))
+            y2 = int(np.clip(y_max + padding['y'], 0, h_img))
 
             entidades.append({
-                'kpts': kpts.tolist(),
+                'kpts': kpts_scaled.tolist(),
                 'scrs': scrs.tolist(),
-                'box': [x1, y1, x2, y2, float(np.mean(scrs[mask])), class_id],
+                'box': [x1, y1, x2, y2, float(np.mean(scrs[mask])), 0.0],
                 'center_x': (x1 + x2) / 2,
-                'id': "Desconhecido"
+                'id': "..."
             })
         return entidades
 
@@ -229,6 +238,20 @@ class AntiTheftOrchestrator:
                 if should_infer:
                     t0 = time.time()
                     keypoints, scores = self.detector.detect(frame)
+                    if keypoints is None:
+                        keypoints = []
+                    elif hasattr(keypoints, "tolist"):
+                        keypoints = keypoints.tolist()
+                    else:
+                        keypoints = list(keypoints)
+
+                    if scores is None:
+                        scores = []
+                    elif hasattr(scores, "tolist"):
+                        scores = scores.tolist()
+                    else:
+                        scores = list(scores)
+
                     self.last_inference_ms = (time.time() - t0) * 1000.0
 
                     self.metrics.on_inference(self.last_inference_ms)
