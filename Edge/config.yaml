@@ -26,6 +26,13 @@ detector:
 
 activities:
   - enabled: true
+    plugin: Atividades_Suspeitas.shoplifting_detector:ShopliftingActivityDetector
+    params:
+      model_path: ./models/activity_classifier.pth
+      seq_length: 45
+      threshold: 0.50
+      cooldown_frames: 45
+  - enabled: true
     plugin: Atividades_Suspeitas.velocity_detector:VelocityDetector
     params:
       velocidade_maxima: 200.0
@@ -88,3 +95,18 @@ spatial_normalization:
     x: 25
     y: 35
   default_class_id: 0.0
+
+# Phase 4: sequence classification (shoplifting vs normal)
+phase4:
+  sequence_length: 30
+  input_size: 34
+  hidden_size: 128
+  num_layers: 1
+  attention_size: 64
+  dropout: 0.1
+  learning_rate: 0.001
+  batch_size: 16
+  epochs: 30
+  weight_decay: 0.0
+  confidence_weighted_loss: true
+  device: null

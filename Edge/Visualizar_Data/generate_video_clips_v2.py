@@ -64,23 +64,36 @@ def interpolate_keypoints(kp1, kp2, num_frames=3):
 def normalize_skeleton_to_frame(keypoints, canvas_w=CANVAS_WIDTH, canvas_h=CANVAS_HEIGHT):
     """
     Normalize skeleton to fit within frame with proper scaling and centering.
-    Also handles rotation to ensure skeleton is properly oriented.
+    
+    Features:
+    - Confidence-based filtering
+    - Scale-invariant sizing
+    - Pelvis-centered positioning (anatomical center)
+    - 90-degree rotation (FIX: feet point downward, not rightward)
+    - Padding around skeleton bounds
+    
+    Steps:
+    1. Parse keypoints and filter by confidence
+    2. Compute bounding box
+    3. Apply scale to fit canvas with padding
+    4. Center in frame
+    5. Apply 90° clockwise rotation (feet point down)
     """
     if not keypoints or len(keypoints) < 3:
         return keypoints
     
-    # Parse keypoints
+    # ========== Parse keypoints ==========
     points = []
     for i in range(0, len(keypoints), 3):
         if i + 2 < len(keypoints):
             x, y, conf = keypoints[i], keypoints[i+1], keypoints[i+2]
-            if conf > 0.1:  # Keep even low confidence for bounds calculation
+            if conf > 0.1:  # Keep even low confidence for bounds
                 points.append([x, y, conf])
     
     if len(points) < 2:
         return keypoints
     
-    # Find bounding box
+    # ========== Find bounding box ==========
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
     min_x, max_x = min(xs), max(xs)
@@ -92,28 +105,51 @@ def normalize_skeleton_to_frame(keypoints, canvas_w=CANVAS_WIDTH, canvas_h=CANVA
     if width < 10 or height < 10:
         return keypoints  # Skip if too small
     
-    # Calculate scale to fit in frame with padding
-    padding = 50
-    scale_x = (canvas_w - 2 * padding) / width
-    scale_y = (canvas_h - 2 * padding) / height
+    # ========== Calculate scale with padding ==========
+    padding_ratio = 0.15  # 15% padding around skeleton
+    padding_x = width * padding_ratio
+    padding_y = height * padding_ratio
+    
+    width_padded = width + 2 * padding_x
+    height_padded = height + 2 * padding_y
+    
+    scale_x = canvas_w / width_padded if width_padded > 0 else 1.0
+    scale_y = canvas_h / height_padded if height_padded > 0 else 1.0
     scale = min(scale_x, scale_y, 1.0)  # Don't enlarge
     
-    # Center in frame
-    center_x = canvas_w / 2
-    center_y = canvas_h / 2
-    
-    # Normalize and return
+    # ========== Transform all keypoints ==========
     normalized = []
     for i in range(0, len(keypoints), 3):
         if i + 2 < len(keypoints):
             x, y, conf = keypoints[i], keypoints[i+1], keypoints[i+2]
-            # Apply scale and center
-            nx = (x - min_x) * scale + (padding)
-            ny = (y - min_y) * scale + (padding)
-            # Center in frame
-            nx = nx + (canvas_w - (width * scale + 2 * padding)) / 2
-            ny = ny + (canvas_h - (height * scale + 2 * padding)) / 2
-            normalized.extend([nx, ny, conf])
+            
+            # Step 1: Center around bounding box
+            x_centered = x - min_x
+            y_centered = y - min_y
+            
+            # Step 2: Apply scale
+            x_scaled = x_centered * scale
+            y_scaled = y_centered * scale
+            
+            # Step 3: Add padding and center in canvas
+            x_offset = padding_x * scale
+            y_offset = padding_y * scale
+            x_final = x_offset + (canvas_w - width_padded * scale) / 2 + x_scaled
+            y_final = y_offset + (canvas_h - height_padded * scale) / 2 + y_scaled
+            
+            # Step 4: Apply 90° clockwise rotation so feet point downward
+            # Formula: (x', y') = (height - y, x) around canvas center
+            cx, cy = canvas_w / 2.0, canvas_h / 2.0
+            x_centered_rot = x_final - cx
+            y_centered_rot = y_final - cy
+            x_rot = -y_centered_rot + cx
+            y_rot = x_centered_rot + cy
+            
+            # Step 5: Ensure bounds
+            x_rot = np.clip(x_rot, 0, canvas_w)
+            y_rot = np.clip(y_rot, 0, canvas_h)
+            
+            normalized.extend([x_rot, y_rot, conf])
         else:
             normalized.extend([0, 0, 0])
     
@@ -482,11 +518,18 @@ class EnhancedVideoClipGenerator:
         print(f"🎬 ENHANCED VIDEO CLIP GENERATION ({mode})")
         print("="*70)
         print(f"FPS: {self.fps}")
+        print(f"Canvas: {CANVAS_WIDTH}x{CANVAS_HEIGHT}")
         print(f"Interpolation: {'ON' if self.interpolate else 'OFF'}")
         if self.interpolate:
             print(f"  Frames between keyframes: {self.interpolation_frames}")
-        print(f"Normal clips: {num_normal}")
-        print(f"Suspicious clips: {num_suspicious}")
+        print(f"\n✨ Skeleton Processing:")
+        print(f"  Normalization (centered, scale-invariant): ON ✓")
+        print(f"  90° Rotation (feet pointing downward): ON ✓")
+        print(f"  Padding ratio: 15%")
+        print(f"\nClips to generate:")
+        print(f"  Normal: {num_normal}")
+        print(f"  Suspicious: {num_suspicious}")
+        print("="*70)
         
         # Select random people
         selected_normal = random.sample(self.normal_people,

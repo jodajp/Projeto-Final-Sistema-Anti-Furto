@@ -15,6 +15,8 @@ from .temporal_pose_filter import (
     TemporalPoseFilterConfig,
 )
 
+from .kinematic_features import KinematicConfig, KinematicFeatureExtractor
+
 __all__ = [
     "AppConfig",
     "ConfigError",
@@ -25,4 +27,6 @@ __all__ = [
     "visualize_normalized_pose",
     "TemporalPoseFilter",
     "TemporalPoseFilterConfig",
+    "KinematicConfig",
+    "KinematicFeatureExtractor",
 ]
