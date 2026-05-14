@@ -1,0 +1,288 @@
+"""
+2D Spatial Normalization for RTMO skeleton data (17 COCO keypoints).
+
+Implements torso-normalized positions with root-relative translation and 
+anatomical scale invariance using strictly vectorized numpy operations.
+
+Key Features:
+  - Root-relative translation: Pelvis (hip midpoint) centered at origin
+  - Anatomical scale invariance: Normalize by torso length (neck-to-pelvis distance)
+  - Config-driven confidence thresholds (no hardcoded values)
+  - Vectorized numpy operations (zero Python loops over keypoints)
+  - Type-safe with full type hints
+  - Fast failure on invalid/low-confidence torso joints
+"""
+
+from dataclasses import dataclass
+from typing import Optional, Tuple
+import numpy as np
+from rich import print as rprint
+
+
+# COCO 17 Keypoint Indices (RTMPose format)
+COCO_KEYPOINT_NAMES = [
+    'nose',           # 0
+    'left_eye',       # 1
+    'right_eye',      # 2
+    'left_ear',       # 3
+    'right_ear',      # 4
+    'left_shoulder',  # 5
+    'right_shoulder', # 6
+    'left_elbow',     # 7
+    'right_elbow',    # 8
+    'left_wrist',     # 9
+    'right_wrist',    # 10
+    'left_hip',       # 11 (pelvis left)
+    'right_hip',      # 12 (pelvis right)
+    'left_knee',      # 13
+    'right_knee',     # 14
+    'left_ankle',     # 15
+    'right_ankle',    # 16
+]
+
+# Anatomical anchor indices
+PELVIS_LEFT_IDX = 11
+PELVIS_RIGHT_IDX = 12
+SHOULDER_LEFT_IDX = 5
+SHOULDER_RIGHT_IDX = 6
+
+
+@dataclass
+class NormalizationParams:
+    """Configuration for spatial normalization."""
+    
+    torso_confidence_threshold: float = 0.5
+    """Minimum confidence for torso joints (pelvis & shoulders) to be valid."""
+    
+    min_torso_length_px: float = 10.0
+    """Minimum torso length (neck-to-pelvis) in pixels to avoid division by near-zero."""
+    
+    allow_invalid_torso: bool = False
+    """If True, use previous valid normalization when torso confidence is low.
+    If False, return all NaNs for invalid frames."""
+
+
+@dataclass
+class NormalizedPose:
+    """Output of spatial normalization."""
+    
+    keypoints: np.ndarray
+    """Normalized keypoints, shape (17, 2). NaN if frame invalid."""
+    
+    scores: np.ndarray
+    """Confidence scores, shape (17,). Unchanged from input."""
+    
+    is_valid: bool
+    """True if torso anchors passed confidence threshold."""
+    
+    pelvis: np.ndarray
+    """Pelvis position (raw), shape (2,)."""
+    
+    neck: np.ndarray
+    """Neck anchor position (raw), shape (2,)."""
+    
+    torso_length: float
+    """Euclidean distance from pelvis to neck (before normalization)."""
+
+
+class SpatialNormalizer:
+    """
+    Normalizes 17-keypoint COCO poses to torso-relative, scale-invariant space.
+    
+    Transformation:
+      1. Translate: pelvis (hip midpoint) -> origin (0, 0)
+      2. Scale: divide by torso length (neck-to-pelvis distance)
+      
+    Vectorized operations only—no Python loops over keypoints.
+    """
+    
+    def __init__(self, params: Optional[NormalizationParams] = None):
+        """
+        Initialize normalizer.
+        
+        Args:
+            params: NormalizationParams with confidence thresholds.
+                   If None, uses defaults.
+        """
+        self.params = params or NormalizationParams()
+        self._prev_valid_pose: Optional[NormalizedPose] = None
+        rprint(
+            f"[NORMALIZER] Initialized with torso_confidence_threshold="
+            f"{self.params.torso_confidence_threshold}"
+        )
+    
+    def normalize(
+        self,
+        keypoints: np.ndarray,
+        scores: np.ndarray,
+    ) -> NormalizedPose:
+        """
+        Normalize a single frame's pose to torso-relative space.
+        
+        Args:
+            keypoints: Shape (17, 2), raw pixel coordinates [x, y]
+            scores: Shape (17,), confidence [0.0-1.0]
+        
+        Returns:
+            NormalizedPose with normalized keypoints or NaNs if invalid
+        
+        Raises:
+            ValueError: If shapes are invalid
+            AssertionError: If dtypes are not as expected
+        """
+        # Validate shapes and dtypes
+        if keypoints.shape != (17, 2):
+            raise ValueError(f"Expected keypoints shape (17, 2), got {keypoints.shape}")
+        if scores.shape != (17,):
+            raise ValueError(f"Expected scores shape (17,), got {scores.shape}")
+        
+        # Ensure float32 for vectorized operations
+        keypoints = np.asarray(keypoints, dtype=np.float32)
+        scores = np.asarray(scores, dtype=np.float32)
+        
+        # ===== Compute Torso Anchors (Vectorized) =====
+        
+        # Pelvis: midpoint of left hip (11) and right hip (12)
+        pelvis_left = keypoints[PELVIS_LEFT_IDX]      # [x, y]
+        pelvis_right = keypoints[PELVIS_RIGHT_IDX]    # [x, y]
+        pelvis = (pelvis_left + pelvis_right) * 0.5   # Vectorized average
+        
+        # Neck: midpoint of left shoulder (5) and right shoulder (6)
+        shoulder_left = keypoints[SHOULDER_LEFT_IDX]  # [x, y]
+        shoulder_right = keypoints[SHOULDER_RIGHT_IDX]  # [x, y]
+        neck = (shoulder_left + shoulder_right) * 0.5  # Vectorized average
+        
+        # Torso confidence: min of the 4 torso joints
+        pelvis_conf = np.minimum(
+            scores[PELVIS_LEFT_IDX],
+            scores[PELVIS_RIGHT_IDX]
+        )
+        neck_conf = np.minimum(
+            scores[SHOULDER_LEFT_IDX],
+            scores[SHOULDER_RIGHT_IDX]
+        )
+        torso_conf = np.minimum(pelvis_conf, neck_conf)
+        
+        # Check torso validity
+        is_valid = bool(torso_conf >= self.params.torso_confidence_threshold)
+        
+        if not is_valid:
+            # Return invalid frame with NaNs
+            if self.params.allow_invalid_torso and self._prev_valid_pose is not None:
+                return self._prev_valid_pose
+            else:
+                return NormalizedPose(
+                    keypoints=np.full((17, 2), np.nan, dtype=np.float32),
+                    scores=scores,
+                    is_valid=False,
+                    pelvis=pelvis,
+                    neck=neck,
+                    torso_length=0.0,
+                )
+        
+        # ===== Compute Torso Length (Vectorized) =====
+        torso_vec = neck - pelvis              # [dx, dy]
+        torso_length = np.linalg.norm(torso_vec)  # Euclidean distance
+        
+        if torso_length < self.params.min_torso_length_px:
+            # Torso too small, return invalid
+            if self.params.allow_invalid_torso and self._prev_valid_pose is not None:
+                return self._prev_valid_pose
+            else:
+                return NormalizedPose(
+                    keypoints=np.full((17, 2), np.nan, dtype=np.float32),
+                    scores=scores,
+                    is_valid=False,
+                    pelvis=pelvis,
+                    neck=neck,
+                    torso_length=torso_length,
+                )
+        
+        # ===== Normalize All Keypoints (Fully Vectorized) =====
+        # Step 1: Translate by subtracting pelvis (broadcasting)
+        centered_kpts = keypoints - pelvis[np.newaxis, :]  # (17, 2) - (1, 2)
+        
+        # Step 2: Scale by dividing by torso length
+        normalized_kpts = centered_kpts / torso_length     # (17, 2) / scalar
+        
+        # Create result
+        result = NormalizedPose(
+            keypoints=normalized_kpts.astype(np.float32),
+            scores=scores,
+            is_valid=True,
+            pelvis=pelvis.astype(np.float32),
+            neck=neck.astype(np.float32),
+            torso_length=float(torso_length),
+        )
+        
+        # Cache valid pose for fallback
+        self._prev_valid_pose = result
+        
+        return result
+    
+    def batch_normalize(
+        self,
+        keypoints: np.ndarray,
+        scores: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Normalize a batch of poses. EXPERIMENTAL.
+        
+        Args:
+            keypoints: Shape (B, 17, 2), batch of poses
+            scores: Shape (B, 17), batch of confidence scores
+        
+        Returns:
+            (normalized_keypoints, validity_mask, torso_lengths)
+                - normalized_keypoints: (B, 17, 2)
+                - validity_mask: (B,) bool array
+                - torso_lengths: (B,) float array
+        """
+        if keypoints.shape[1:] != (17, 2):
+            raise ValueError(f"Expected shape (B, 17, 2), got {keypoints.shape}")
+        if scores.shape[1:] != (17,):
+            raise ValueError(f"Expected shape (B, 17), got {scores.shape}")
+        
+        batch_size = keypoints.shape[0]
+        
+        # Vectorized pelvis computation
+        pelvis_left = keypoints[:, PELVIS_LEFT_IDX, :]       # (B, 2)
+        pelvis_right = keypoints[:, PELVIS_RIGHT_IDX, :]     # (B, 2)
+        pelvis = (pelvis_left + pelvis_right) * 0.5           # (B, 2)
+        
+        # Vectorized neck computation
+        shoulder_left = keypoints[:, SHOULDER_LEFT_IDX, :]    # (B, 2)
+        shoulder_right = keypoints[:, SHOULDER_RIGHT_IDX, :]  # (B, 2)
+        neck = (shoulder_left + shoulder_right) * 0.5         # (B, 2)
+        
+        # Torso confidence check
+        pelvis_conf = np.minimum(
+            scores[:, PELVIS_LEFT_IDX],
+            scores[:, PELVIS_RIGHT_IDX]
+        )  # (B,)
+        neck_conf = np.minimum(
+            scores[:, SHOULDER_LEFT_IDX],
+            scores[:, SHOULDER_RIGHT_IDX]
+        )  # (B,)
+        torso_conf = np.minimum(pelvis_conf, neck_conf)  # (B,)
+        validity_mask = torso_conf >= self.params.torso_confidence_threshold
+        
+        # Torso length (vectorized)
+        torso_vec = neck - pelvis  # (B, 2)
+        torso_lengths = np.linalg.norm(torso_vec, axis=1)  # (B,)
+        
+        # Apply validity constraint
+        validity_mask &= torso_lengths >= self.params.min_torso_length_px
+        
+        # Normalize
+        centered_kpts = keypoints - pelvis[:, np.newaxis, :]  # (B, 17, 2)
+        normalized_kpts = centered_kpts / torso_lengths[:, np.newaxis, np.newaxis]
+        
+        # Set invalid frames to NaN
+        normalized_kpts[~validity_mask] = np.nan
+        
+        return (
+            normalized_kpts.astype(np.float32),
+            validity_mask,
+            torso_lengths.astype(np.float32),
+        )

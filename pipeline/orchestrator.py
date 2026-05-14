@@ -5,6 +5,9 @@ import cv2
 import numpy as np
 import torch
 
+from .spatial_normalizer import SpatialNormalizer, NormalizationParams
+from .skeleton_visualizer import SkeletonVisualizer
+from .temporal_pose_filter import TemporalPoseFilter, TemporalPoseFilterConfig
 from Alertas.database_handler import DatabaseHandler
 from bytetracker import BYTETracker
 from Detecao.detector_factory import create_detector
@@ -47,6 +50,48 @@ class AntiTheftOrchestrator:
         self.last_tracked_objects = []
 
         self.db = DatabaseHandler()
+        
+        # Initialize temporal pose filtering
+        temporal_cfg = config.temporal_filter_config()
+        if temporal_cfg.get("enabled", True):
+            self.temporal_filter_enabled = True
+            temporal_filter_config = TemporalPoseFilterConfig(
+                enabled=temporal_cfg.get("enabled", True),
+                smoothing_factor=temporal_cfg.get("smoothing_factor", 0.6),
+                smoothing_factor_fast=temporal_cfg.get("smoothing_factor_fast", 0.85),
+                rapid_movement_threshold=temporal_cfg.get("rapid_movement_threshold", 5.0),
+                velocity_smoothing=temporal_cfg.get("velocity_smoothing", 0.3),
+                occlusion_confidence_threshold=temporal_cfg.get("occlusion_confidence_threshold", 0.3),
+                max_occlusion_frames=temporal_cfg.get("max_occlusion_frames", 5),
+                velocity_damping=temporal_cfg.get("velocity_damping", 0.94),
+            )
+            self.temporal_filter = TemporalPoseFilter(temporal_filter_config)
+        else:
+            self.temporal_filter_enabled = False
+            self.temporal_filter = None
+
+        # Initialize spatial normalization
+        spatial_cfg = config.data.get("spatial_normalization", {})
+        if spatial_cfg.get("enabled", False):
+            self.spatial_norm_enabled = True
+            norm_params = NormalizationParams(
+                torso_confidence_threshold=spatial_cfg.get("torso_confidence_threshold", 0.5),
+                min_torso_length_px=spatial_cfg.get("min_torso_length_px", 10.0),
+                allow_invalid_torso=spatial_cfg.get("allow_invalid_torso", False),
+            )
+            self.normalizer = SpatialNormalizer(norm_params)
+            self.skeleton_viz = SkeletonVisualizer()
+            self.show_normalized = True
+        else:
+            self.spatial_norm_enabled = False
+            self.normalizer = None
+            self.skeleton_viz = None
+            self.show_normalized = False
+
+        self.last_detection = ([], [])
+        self.last_inference_ms = 0.0
+        self.temporal_filter_applied = False
+
 
     def _print_startup(self):
         print("\n" + "=" * 60)
@@ -92,35 +137,44 @@ class AntiTheftOrchestrator:
         # ndmin trata a escala automaticamente (0, 1 ou N pessoas)
         kpts_arr = np.array(keypoints, ndmin=3)
         scrs_arr = np.array(scores, ndmin=2)
+        h_img, w_img = frame_shape[:2]
 
-        if kpts_arr.size == 0 or kpts_arr.shape[-1] != 2:
-            return []
+        # DETECÇÃO DE ESCALA: Em vez de /2 fixo, calculamos o rácio real.
+        # Se os pontos vêm em 1280 e a imagem é 640, o scale será 0.5 (equivalente ao /2)
+        # Se a imagem for igual ao modelo, o scale será 1.0 (não estraga nada)
+        input_w = self.detector_info.get('input_width', w_img * 2 if "/2" else w_img) 
+        scale_x = w_img / input_w
+        scale_y = h_img / self.detector_info.get('input_height', h_img * 2 if "/2" else h_img)
 
         viz_cfg = self.config.visualization()
         padding = viz_cfg.get('bbox_padding', {'x': 25, 'y': 35})
         conf_min = viz_cfg.get('confidence_threshold', 0.3)
-        class_id = viz_cfg.get('default_class_id', 0.0)
 
         entidades = []
         for scrs, kpts in zip(scrs_arr, kpts_arr):
             mask = scrs > conf_min
             if not np.any(mask): continue 
 
-            kpts_vis = kpts[mask]
-            x_min, y_min = np.min(kpts_vis, axis=0)/2
-            x_max, y_max = np.max(kpts_vis, axis=0)/2
+            # Aplica a escala correctiva (O substituto profissional do /2)
+            kpts_scaled = kpts.copy()
+            kpts_scaled[:, 0] *= scale_x
+            kpts_scaled[:, 1] *= scale_y
 
-            x1 = int(max(0, x_min - padding['x']))
-            y1 = int(max(0, y_min - padding['y']))
-            x2 = int(min(frame_shape[1], x_max + padding['x']))
-            y2 = int(min(frame_shape[0], y_max + padding['y']))
+            kpts_vis = kpts_scaled[mask]
+            x_min, y_min = np.min(kpts_vis, axis=0)
+            x_max, y_max = np.max(kpts_vis, axis=0)
+
+            x1 = int(np.clip(x_min - padding['x'], 0, w_img))
+            y1 = int(np.clip(y_min - padding['y'], 0, h_img))
+            x2 = int(np.clip(x_max + padding['x'], 0, w_img))
+            y2 = int(np.clip(y_max + padding['y'], 0, h_img))
 
             entidades.append({
-                'kpts': kpts.tolist(),
+                'kpts': kpts_scaled.tolist(),
                 'scrs': scrs.tolist(),
-                'box': [x1, y1, x2, y2, float(np.mean(scrs[mask])), class_id],
+                'box': [x1, y1, x2, y2, float(np.mean(scrs[mask])), 0.0],
                 'center_x': (x1 + x2) / 2,
-                'id': "Desconhecido"
+                'id': "..."
             })
         return entidades
 
@@ -173,49 +227,68 @@ class AntiTheftOrchestrator:
             while True:
                 ret, frame = cap.read()
                 if not ret: break
-                if self.metrics.frame_count == 0:
-                    print(f"[VIDEO] Resolução Real: {frame.shape[1]}x{frame.shape[0]}")
-
+                
                 self.metrics.on_frame()
                 timestamp = time.time()
 
-                # 1. INFERÊNCIA OU CACHE
                 should_infer = (self.metrics.frame_count % self.metrics.frame_skip) == 0
                 if should_infer:
-                    t0 = time.time()
                     keypoints, scores = self.detector.detect(frame)
-                    self.last_inference_ms = (time.time() - t0) * 1000.0
-                    self.metrics.on_inference(self.last_inference_ms)
                     self.last_detection = (keypoints, scores)
                 else:
                     keypoints, scores = self.last_detection
 
-                # 2. PROCESSAMENTO ÚNICO (Reciclagem de código)
+                if self.temporal_filter_enabled and len(keypoints) > 0:
+                    k_arr, s_arr = np.array(keypoints), np.array(scores)
+                    if k_arr.shape == (17, 2):
+                        keypoints, scores, _ = self.temporal_filter.filter_pose(k_arr, s_arr)
+                        keypoints, scores = keypoints.tolist(), scores.tolist()
+
                 entidades = self._preparar_entidades(keypoints, scores, frame.shape)
-
-                # 3. ATUALIZAÇÃO DO TRACKER
-                if should_infer:
-                    if entidades:
-                        # Extrai apenas as bboxes validadas para o tracker
-                        bboxes = torch.tensor([e['box'] for e in entidades], dtype=torch.float32)
-                        self.last_tracked_objects = self.tracker.update(bboxes, frame.shape[:2])
-                        self.metrics.on_detection()
-                    else:
-                        self.last_tracked_objects = []
-
-                # 4. CASAMENTO DE IDS E LÓGICA
+                if should_infer and entidades:
+                    bboxes = torch.tensor([e['box'] for e in entidades], dtype=torch.float32)
+                    self.last_tracked_objects = self.tracker.update(bboxes, frame.shape[:2])
+                
                 self._atribuir_ids(entidades)
                 alert_text = self._processar_atividades(entidades, timestamp)
 
-                # 5. RENDERIZAÇÃO FINAL
+                # --- 5. RENDERIZAÇÃO E INTERFACE ---
+                # Criamos a imagem com esqueletos
                 output = self.renderer.render(frame, keypoints, scores)
+                
+                # Desenhamos as nossas caixas multi-pessoa recicladas
                 self._desenhar_caixas(output, entidades)
 
-                self.renderer.draw_overlay(output, self._build_info_lines(should_infer), alert_text, self.debug)
-                cv2.imshow(self.renderer.window_name, output)
+                # Mostramos o Overlay de Debug (FPS, Deteções, etc.)
+                info = self._build_info_lines(should_infer)
+                self.renderer.draw_overlay(output, info, alert_text, self.debug)
 
-                if cv2.waitKey(1) & 0xFF in (ord("q"), ord("Q")): break
+                # GARANTIA VISUAL: Forçamos a exibição da janela
+                win_name = self.renderer.window_name or "SISTEMA ANTI-FURTO"
+                cv2.imshow(win_name, output)
+
+                if self.spatial_norm_enabled and self.show_normalized and len(keypoints) > 0:
+                    self._render_esqueleto_normalizado(keypoints, scores)
+
+                # --- COMANDOS DE TECLADO ---
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord("q"), ord("Q")):
+                    break
+                if key in (ord("d"), ord("D")):
+                    self.debug = not self.debug
+                    state = "ATIVADO" if self.debug else "DESATIVADO"
+                    print(f"[DEBUG] {state}")
+                if key in (ord("n"), ord("N")) and self.spatial_norm_enabled:
+                    self.show_normalized = not self.show_normalized
+                    state = "VISIVEL" if self.show_normalized else "OCULTO"
+                    print(f"[NORMALIZADO] {state}")
+                if key in (ord("t"), ord("T")) and self.temporal_filter_enabled:
+                    # Toggle temporal filter on/off
+                    self.temporal_filter_enabled = not self.temporal_filter_enabled
+                    state = "ATIVO" if self.temporal_filter_enabled else "INATIVO"
+                    print(f"[TEMPORAL] Filtro {state}")
+                    if not self.temporal_filter_enabled:
+                        self.temporal_filter.reset()
         finally:
             cap.release()
             cv2.destroyAllWindows()
-            self._print_summary()
