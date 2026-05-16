@@ -1,0 +1,67 @@
+
+services:
+  api_backend:
+    image: goncalofcouto/api_backend:latest  # <--- APENAS TESTE LOCAL
+    build: 
+      context: ./Backend  
+    ports:
+      - "8000:8000"            
+    networks:
+      - rede_cluster              
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure    
+
+  dashboard_frontend:
+    image: goncalofcouto/dashboard:latest    
+    build: 
+      context: ./dashboard-antifurto 
+    ports:
+      - "8080:80"                
+    networks:
+      - rede_cluster
+
+  db_master:
+    image: bitnami/postgresql:latest
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=master      # Master
+      - POSTGRESQL_REPLICATION_USER=repl_user   # Cria um utilizador só para fazer as cópias
+      - POSTGRESQL_REPLICATION_PASSWORD=senha_replica
+      - POSTGRESQL_USERNAME=admin               
+      - POSTGRESQL_PASSWORD=123
+      - POSTGRESQL_DATABASE=antifurto_db
+    ports:
+      - "5432:5432"
+    networks:
+      - rede_cluster
+    volumes:
+      - dados_master:/bitnami/postgresql
+
+  db_replica:
+    image: bitnami/postgresql:latest
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=slave       # Slave
+      - POSTGRESQL_MASTER_HOST=db_master        # Indica o Master
+      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - POSTGRESQL_REPLICATION_USER=repl_user   # Usa o mesmo utilizador de cópia
+      - POSTGRESQL_REPLICATION_PASSWORD=senha_replica
+      - POSTGRESQL_PASSWORD=123
+    networks:
+      - rede_cluster
+    volumes:
+      - dados_replica:/bitnami/postgresql
+
+networks:
+  rede_cluster:
+    driver: overlay   
+    attachable: true 
+
+volumes:
+  dados_master:
+  dados_replica:
+
+# docker stack deploy -c docker-compose.yml teste_local | docker service ls
