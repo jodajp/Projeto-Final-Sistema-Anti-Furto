@@ -122,20 +122,18 @@ class MMPoseDetectorImpl:
                     scr = person.get('keypoint_scores', [])
                     
                     if len(kps) > 0:
-                        # Converte para listas Python limpas
                         if hasattr(kps, 'tolist'):
-                            keypoints = kps.tolist()
+                            keypoints.append(kps.tolist())
                         else:
-                            keypoints = list(kps)
+                            keypoints.append(list(kps))
                         
                         if len(scr) > 0:
                             if hasattr(scr, 'tolist'):
-                                scores = scr.tolist()
+                                scores.append(scr.tolist())
                             else:
-                                scores = list(scr)
+                                scores.append(list(scr))
                         else:
-                            scores = [1.0] * len(keypoints)
-                        break
+                            scores.append([1.0] * len(kps))
             
             return keypoints, scores
         

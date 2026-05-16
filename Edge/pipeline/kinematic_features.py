@@ -106,9 +106,10 @@ class KinematicFeatureExtractor:
         dy = limb_vecs[..., 1]
         norm = np.sqrt(dx * dx + dy * dy)
 
-        # Avoid division by zero
+        # Avoid division by zero without triggering a runtime warning.
         eps = float(self.config.eps)
-        inv_norm = np.where(norm > eps, 1.0 / (norm + 0.0), 0.0)
+        inv_norm = np.zeros_like(norm, dtype=np.float32)
+        np.divide(1.0, norm, out=inv_norm, where=norm > eps)
 
         ux = dx * inv_norm
         uy = dy * inv_norm

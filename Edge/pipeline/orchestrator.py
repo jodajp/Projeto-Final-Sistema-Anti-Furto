@@ -1,6 +1,4 @@
-import os
 import time
-import json
 import cv2
 import numpy as np
 import torch
@@ -13,9 +11,9 @@ from .alert_dispatcher import AlertDispatcher, load_alert_handlers
 from .metrics import PipelineMetrics
 from .renderer import PoseRenderer
 from .video_source import create_video_source
-from .spatial_normalizer import SpatialNormalizer, NormalizationParams
+from .spatial_normalizer import SpatialNormalizer
 from .skeleton_visualizer import SkeletonVisualizer
-from .temporal_pose_filter import TemporalPoseFilter, TemporalPoseFilterConfig
+from .temporal_pose_filter import TemporalPoseFilter
 
 
 class AntiTheftOrchestrator:
@@ -25,6 +23,7 @@ class AntiTheftOrchestrator:
         self.config = config
         self.runtime_config = config.runtime()
 
+        # Inicializa o detector de pose
         self.detector = create_detector(config.detector_config())
         self.detector_info = self.detector.get_info() or {}
 
@@ -39,35 +38,15 @@ class AntiTheftOrchestrator:
         self.cache_result = bool(self.runtime_config.get("cache_result", True))
         self.debug = bool(self.runtime_config.get("debug", False))
 
-        # Initialize temporal pose filtering
-        temporal_cfg = config.temporal_filter_config()
-        if temporal_cfg.get("enabled", True):
-            self.temporal_filter_enabled = True
-            temporal_filter_config = TemporalPoseFilterConfig(
-                enabled=temporal_cfg.get("enabled", True),
-                smoothing_factor=temporal_cfg.get("smoothing_factor", 0.6),
-                smoothing_factor_fast=temporal_cfg.get("smoothing_factor_fast", 0.85),
-                rapid_movement_threshold=temporal_cfg.get("rapid_movement_threshold", 5.0),
-                velocity_smoothing=temporal_cfg.get("velocity_smoothing", 0.3),
-                occlusion_confidence_threshold=temporal_cfg.get("occlusion_confidence_threshold", 0.3),
-                max_occlusion_frames=temporal_cfg.get("max_occlusion_frames", 5),
-                velocity_damping=temporal_cfg.get("velocity_damping", 0.94),
-            )
-            self.temporal_filter = TemporalPoseFilter(temporal_filter_config)
-        else:
-            self.temporal_filter_enabled = False
-            self.temporal_filter = None
+        # Initialize temporal pose filtering directly from config
+        self.temporal_filter = TemporalPoseFilter(config)
+        self.temporal_filters_por_id = {}
 
         # Initialize spatial normalization
         spatial_cfg = config.data.get("spatial_normalization", {})
         if spatial_cfg.get("enabled", False):
             self.spatial_norm_enabled = True
-            norm_params = NormalizationParams(
-                torso_confidence_threshold=spatial_cfg.get("torso_confidence_threshold", 0.5),
-                min_torso_length_px=spatial_cfg.get("min_torso_length_px", 10.0),
-                allow_invalid_torso=spatial_cfg.get("allow_invalid_torso", False),
-            )
-            self.normalizer = SpatialNormalizer(norm_params)
+            self.normalizer = SpatialNormalizer(config)
             self.skeleton_viz = SkeletonVisualizer()
             self.show_normalized = True
         else:
@@ -78,16 +57,19 @@ class AntiTheftOrchestrator:
 
         self.last_detection = ([], [])
         self.last_inference_ms = 0.0
-        self.temporal_filter_applied = False
+        self.frame = None
 
+        # Tuned tracker params for more persistent IDs
         self.tracker = BYTETracker(
-            track_thresh=0.5, 
-            track_buffer=30, 
-            match_thresh=0.8
+            track_thresh=0.4,
+            track_buffer=60,
+            match_thresh=0.6,
         )
         self.last_tracked_objects = []
 
         self.db = DatabaseHandler()
+        # debug helper to print bbox/keypoint diagnostics once
+        self._debug_bbox_printed = False
 
 
     def _print_startup(self):
@@ -97,21 +79,34 @@ class AntiTheftOrchestrator:
         print(f"Backend: {self.detector_info.get('backend', 'N/A')}")
         print(f"Atividades carregadas: {len(self.activities)}")
         print(f"Handlers de alerta: {len(self.alert_dispatcher.handlers)}")
-        temporal_status = "✓ ATIVO" if self.temporal_filter_enabled else "desativado"
+        temporal_status = "✓ ATIVO" if self.temporal_filter.is_enabled() else "desativado"
         print(f"Filtro Temporal: {temporal_status}")
         spatial_status = "✓ ATIVO" if self.spatial_norm_enabled else "desativado"
         print(f"Normalização Espacial: {spatial_status}")
         print("Controles: Q = sair | D = debug | N = toggle normalizado | T = toggle temporal")
         print("=" * 60 + "\n")
 
+    def _count_people(self, keypoints):
+        if keypoints is None:
+            return 0
+
+        keypoints_array = np.asarray(keypoints)
+        if keypoints_array.size == 0:
+            return 0
+        if keypoints_array.ndim == 2:
+            return 1
+        if keypoints_array.ndim == 3:
+            return int(keypoints_array.shape[0])
+        return 0
+
     def _build_info_lines(self, had_new_inference: bool):
-        keypoint_count = len(self.last_detection[0]) if self.last_detection else 0
+        people_count = self._count_people(self.last_detection[0])
         inference_state = "NEW" if had_new_inference else "CACHED"
 
         return [
             f"FPS: {self.metrics.fps:.1f}",
             f"Frame: {self.metrics.frame_count}",
-            f"Keypoints: {keypoint_count}",
+            f"People: {people_count}",
             f"Inference: {self.last_inference_ms:.1f}ms ({inference_state})",
             f"Uptime: {int(self.metrics.uptime_seconds())}s",
             f"Success: {self.metrics.success_rate():.0f}%",
@@ -130,56 +125,65 @@ class AntiTheftOrchestrator:
         self.alert_dispatcher.print_summary()
 
     def _preparar_entidades(self, keypoints, scores, frame_shape):
-        """Calcula bboxes e normaliza dados para 0, 1 ou N pessoas sem erros de ambiguidade."""
-        if keypoints is None or scores is None or len(keypoints) == 0:
+        """Calcula bboxes para 1 ou N pessoas."""
+        if keypoints is None or scores is None:
             return []
-        
-        # ndmin trata a escala automaticamente (0, 1 ou N pessoas)
-        kpts_arr = np.array(keypoints, ndmin=3)
-        scrs_arr = np.array(scores, ndmin=2)
+
+        kpts_arr = np.asarray(keypoints, dtype=np.float32)
+        scrs_arr = np.asarray(scores, dtype=np.float32)
+
+        if kpts_arr.size == 0 or scrs_arr.size == 0:
+            return []
+
+        if kpts_arr.ndim == 2:
+            kpts_arr = kpts_arr[np.newaxis, :, :]
+        if scrs_arr.ndim == 1:
+            scrs_arr = scrs_arr[np.newaxis, :]
+
         h_img, w_img = frame_shape[:2]
-
-        # DETECÇÃO DE ESCALA: Em vez de /2 fixo, calculamos o rácio real.
-        # Se os pontos vêm em 1280 e a imagem é 640, o scale será 0.5 (equivalente ao /2)
-        # Se a imagem for igual ao modelo, o scale será 1.0 (não estraga nada)
-        input_w = self.detector_info.get('input_width', w_img * 2 if "/2" else w_img) 
-        scale_x = w_img / input_w
-        scale_y = h_img / self.detector_info.get('input_height', h_img * 2 if "/2" else h_img)
-
         viz_cfg = self.config.visualization()
         padding = viz_cfg.get('bbox_padding', {'x': 25, 'y': 35})
         conf_min = viz_cfg.get('confidence_threshold', 0.3)
 
         entidades = []
         for scrs, kpts in zip(scrs_arr, kpts_arr):
-            mask = scrs > conf_min
-            if not np.any(mask): continue 
+            # Filter keypoints: must have valid coordinates and confidence > 0.2
+            valid_mask = (scrs > 0.2) & np.isfinite(kpts).all(axis=1)
+            valid_mask = valid_mask & (kpts[:, 0] > 0) & (kpts[:, 0] < w_img)
+            valid_mask = valid_mask & (kpts[:, 1] > 0) & (kpts[:, 1] < h_img)
+            
+            if not np.any(valid_mask):
+                continue
+            
+            kpts_valid = kpts[valid_mask]
+            x_min, y_min = np.min(kpts_valid, axis=0)
+            x_max, y_max = np.max(kpts_valid, axis=0)
 
-            # Aplica a escala correctiva (O substituto profissional do /2)
-            kpts_scaled = kpts.copy()
-            kpts_scaled[:, 0] *= scale_x
-            kpts_scaled[:, 1] *= scale_y
+            x1 = int(np.clip(x_min - padding['x'], 0, w_img - 1))
+            y1 = int(np.clip(y_min - padding['y'], 0, h_img - 1))
+            x2 = int(np.clip(x_max + padding['x'], 0, w_img - 1))
+            y2 = int(np.clip(y_max + padding['y'], 0, h_img - 1))
 
-            kpts_vis = kpts_scaled[mask]
-            x_min, y_min = np.min(kpts_vis, axis=0)
-            x_max, y_max = np.max(kpts_vis, axis=0)
-
-            x1 = int(np.clip(x_min - padding['x'], 0, w_img))
-            y1 = int(np.clip(y_min - padding['y'], 0, h_img))
-            x2 = int(np.clip(x_max + padding['x'], 0, w_img))
-            y2 = int(np.clip(y_max + padding['y'], 0, h_img))
+            # Diagnostic print to help debug bbox placement (once)
+            if not getattr(self, '_debug_bbox_printed', False):
+                try:
+                    print(f"[DEBUG_BBOX] frame_shape=(w={w_img},h={h_img}), valid_kpts_min=({x_min:.1f},{y_min:.1f}), max=({x_max:.1f},{y_max:.1f}), box=({x1},{y1},{x2},{y2})")
+                except Exception:
+                    pass
+                self._debug_bbox_printed = True
 
             entidades.append({
-                'kpts': kpts_scaled.tolist(),
+                'kpts': kpts.tolist(),
                 'scrs': scrs.tolist(),
-                'box': [x1, y1, x2, y2, float(np.mean(scrs[mask])), 0.0],
+                'box': [x1, y1, x2, y2, float(np.mean(scrs[valid_mask])), 0.0],
                 'center_x': (x1 + x2) / 2,
-                'id': "..."
+                'center_y': (y1 + y2) / 2,
+                'id': '...'
             })
         return entidades
 
     def _atribuir_ids(self, entidades):
-        """Cruza os IDs do ByteTrack com as bboxes originais por posição horizontal."""
+        """Atribui IDs do ByteTrack às entidades usando distância 2D para melhor rastreamento."""
         if not entidades or self.last_tracked_objects is None or len(self.last_tracked_objects) == 0:
             return
 
@@ -187,17 +191,35 @@ class AntiTheftOrchestrator:
         for obj in self.last_tracked_objects:
             if hasattr(obj, 'track_id'):
                 track_id = obj.track_id
-                tx1, tx2 = float(obj.tlbr[0]), float(obj.tlbr[2])
+                tx1, tx2, ty1, ty2 = float(obj.tlbr[0]), float(obj.tlbr[2]), float(obj.tlbr[1]), float(obj.tlbr[3])
             else:
-                tx1, tx2, track_id = float(obj[0]), float(obj[2]), int(obj[4])
-            objetos_tracker.append({'id': track_id, 'center_x': (tx1 + tx2) / 2})
+                tx1, tx2, ty1, ty2, track_id = float(obj[0]), float(obj[2]), float(obj[1]), float(obj[3]), int(obj[4])
+            cx, cy = (tx1 + tx2) / 2, (ty1 + ty2) / 2
+            objetos_tracker.append({'id': track_id, 'center_x': cx, 'center_y': cy})
 
-        entidades.sort(key=lambda e: e['center_x'])
-        objetos_tracker.sort(key=lambda t: t['center_x'])
+        # Dynamic max distance threshold based on frame width
+        if self.frame is not None and hasattr(self.frame, 'shape'):
+            try:
+                frame_w = int(self.frame.shape[1])
+            except Exception:
+                frame_w = 640
+        else:
+            frame_w = 640
+        max_match_dist = max(80, int(frame_w * 0.25))
 
-        for i, entidade in enumerate(entidades):
-            if i < len(objetos_tracker):
-                entidade['id'] = objetos_tracker[i]['id']
+        # Greedy matching: assign nearest tracker to each entity and remove matched tracker
+        remaining = objetos_tracker.copy()
+        for entidade in entidades:
+            ex, ey = entidade['center_x'], entidade['center_y']
+            if not remaining:
+                continue
+            # find nearest
+            closest = min(remaining, key=lambda t: (ex - t['center_x'])**2 + (ey - t['center_y'])**2)
+            dist_sq = (ex - closest['center_x'])**2 + (ey - closest['center_y'])**2
+            if dist_sq < max_match_dist**2:
+                entidade['id'] = closest['id']
+                # remove to prevent duplicate assignment
+                remaining = [r for r in remaining if r['id'] != closest['id']]
 
     def _processar_atividades(self, entidades, timestamp):
         """Executa a lógica de detecção de furto e grava na base de dados SQLite."""
@@ -218,16 +240,110 @@ class AntiTheftOrchestrator:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, f"ID: {ent['id']}", (x1, max(0, y1 - 10)), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            
+    def _processar_frame(self, keypoints, scores, frame_shape, timestamp):
+        """Processa poses, tracking, filtro temporal e atividades."""
+        if keypoints is None or scores is None:
+            return [], None
 
+        entidades = self._preparar_entidades(keypoints, scores, frame_shape)
+        if not entidades:
+            self.last_tracked_objects = []
+            return [], None
+
+        bboxes = torch.tensor([ent['box'] for ent in entidades], dtype=torch.float32)
+        self.last_tracked_objects = self.tracker.update(bboxes, frame_shape[:2])
+        self.metrics.on_detection()
+        self._atribuir_ids(entidades)
+
+        if self.temporal_filter.is_enabled():
+            ids_presentes = {ent['id'] for ent in entidades if ent.get('id') is not None}
+            self.temporal_filters_por_id = {
+                track_id: filter_obj
+                for track_id, filter_obj in self.temporal_filters_por_id.items()
+                if track_id in ids_presentes
+            }
+
+            for ent in entidades:
+                track_id = ent.get('id')
+                if track_id is None:
+                    continue
+
+                filter_obj = self.temporal_filters_por_id.get(track_id)
+                if filter_obj is None:
+                    filter_obj = TemporalPoseFilter(self.config)
+                    self.temporal_filters_por_id[track_id] = filter_obj
+
+                kpts_arr = np.asarray(ent['kpts'], dtype=np.float32)
+                scrs_arr = np.asarray(ent['scrs'], dtype=np.float32)
+                filt_kpts, filt_scrs, _ = filter_obj.filter_pose(kpts_arr, scrs_arr)
+                ent['kpts'] = filt_kpts.tolist()
+                ent['scrs'] = filt_scrs.tolist()
+
+        alert_text = self._processar_atividades(entidades, timestamp)
+        return entidades, alert_text
+
+
+    def _render_normalized_canvas(self, entidades):
+        if not entidades or not self.spatial_norm_enabled:
+            return None
+        if self.normalizer is None or self.skeleton_viz is None:
+            return None
+
+        poses = []
+        for ent in entidades[:4]:
+            kpts_arr = np.asarray(ent['kpts'], dtype=np.float32)
+            scrs_arr = np.asarray(ent['scrs'], dtype=np.float32)
+            if kpts_arr.shape != (17, 2) or scrs_arr.shape != (17,):
+                continue
+
+            try:
+                normalized = self.normalizer.normalize(kpts_arr, scrs_arr)
+            except Exception as exc:
+                if self.debug:
+                    print(f"[ERRO] Normalizacao: {exc}")
+                continue
+
+            if normalized.is_valid:
+                title = f"ID {ent.get('id', '?')} | Torso: {normalized.torso_length:.1f}px"
+                canvas = self.skeleton_viz.render(normalized.keypoints, normalized.scores, title=title)
+            else:
+                canvas = np.zeros((self.skeleton_viz.canvas_size, self.skeleton_viz.canvas_size, 3), dtype=np.uint8)
+                cv2.putText(
+                    canvas,
+                    f"ID {ent.get('id', '?')} - Frame invalido",
+                    (12, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 0, 255),
+                    2,
+                )
+            poses.append(canvas)
+
+        if not poses:
+            return None
+
+        cell_size = self.skeleton_viz.canvas_size // 2
+        grid = np.zeros((self.skeleton_viz.canvas_size, self.skeleton_viz.canvas_size, 3), dtype=np.uint8)
+        for idx, canvas in enumerate(poses[:4]):
+            row = idx // 2
+            col = idx % 2
+            y1 = row * cell_size
+            x1 = col * cell_size
+            resized = cv2.resize(canvas, (cell_size, cell_size))
+            grid[y1:y1 + cell_size, x1:x1 + cell_size] = resized
+
+        return grid
 
     def run(self):
         self._print_startup()
         cap = self.video_source.open()
-
         try:
             while True:
                 ret, frame = cap.read()
-                if not ret: break
+                self.frame = frame
+                if not ret:
+                    break
 
                 if self.metrics.frame_count == 0:
                     print(f"[VIDEO] Resolução Real: {frame.shape[1]}x{frame.shape[0]}")
@@ -243,94 +359,47 @@ class AntiTheftOrchestrator:
 
                     self.metrics.on_inference(self.last_inference_ms)
                     self.last_detection = (keypoints, scores)
-
-                    if keypoints:
-                        self.metrics.on_detection()
                 elif not self.cache_result:
                     self.last_detection = ([], [])
 
                 keypoints, scores = self.last_detection
 
-                entidades = self._preparar_entidades(keypoints, scores, frame.shape)
-
-                if should_infer:
-                    if entidades:
-                        bboxes = torch.tensor([e['box'] for e in entidades], dtype=torch.float32)
-                        self.last_tracked_objects = self.tracker.update(bboxes, frame.shape[:2])
-                        self.metrics.on_detection()
-                    else:
-                        self.last_tracked_objects = []
-
-                self._atribuir_ids(entidades)
-
-                # Apply temporal filtering for jitter reduction and occlusion prediction
-                temporal_filter = self.temporal_filter
-                if self.temporal_filter_enabled and temporal_filter is not None and keypoints:
-                    try:
-                        keypoints_array = np.array(keypoints, dtype=np.float32)
-                        scores_array = np.array(scores, dtype=np.float32)
-                        
-                        # Ensure proper shape
-                        if keypoints_array.shape == (17, 2) and scores_array.shape == (17,):
-                            filtered_kpts, filtered_scores, was_predicted = temporal_filter.filter_pose(
-                                keypoints_array, scores_array
-                            )
-                            keypoints = filtered_kpts.tolist()
-                            scores = filtered_scores.tolist()
-                            self.temporal_filter_applied = True
-                    except Exception as e:
-                        if self.debug:
-                            print(f"[TEMPORAL] Erro ao filtrar: {e}")
-
+                entidades = []
                 alert_text = None
-                if entidades:
-                    alert_text = self._processar_atividades(entidades, timestamp)
+                if keypoints is not None and len(keypoints) > 0:
+                    entidades, alert_text = self._processar_frame(keypoints, scores, frame.shape, timestamp)
 
-                output = self.renderer.render(frame, keypoints, scores)
+                # Render using processed entities so skeletons align with boxes/IDs
+                if entidades:
+                    render_kpts = [ent['kpts'] for ent in entidades]
+                    render_scrs = [ent['scrs'] for ent in entidades]
+                else:
+                    render_kpts, render_scrs = keypoints, scores
+
+                output = self.renderer.render(frame, render_kpts, render_scrs)
                 info_lines = self._build_info_lines(had_new_inference=should_infer)
                 self._desenhar_caixas(output, entidades)
-                self.renderer.draw_overlay(
-                    output,
-                    info_lines,
-                    alert_text=alert_text,
-                    debug=self.debug,
-                )
+                self.renderer.draw_overlay(output, info_lines, alert_text=alert_text, debug=self.debug)
 
+                # Show three simple windows: main video, skeleton-only, normalized
                 cv2.imshow(self.renderer.window_name, output)
 
-                # Render normalized skeleton if enabled
-                normalizer = self.normalizer
-                skeleton_viz = self.skeleton_viz
-                if self.spatial_norm_enabled and self.show_normalized and normalizer is not None and skeleton_viz is not None and keypoints:
+                sk_canvas = getattr(self.renderer, 'last_canvas', None)
+                if sk_canvas is not None:
                     try:
-                        keypoints_array = np.array(keypoints, dtype=np.float32)
-                        scores_array = np.array(scores, dtype=np.float32)
-                        
-                        normalized = normalizer.normalize(keypoints_array, scores_array)
-                        
-                        if normalized.is_valid:
-                            normalized_canvas = skeleton_viz.render(
-                                normalized.keypoints,
-                                normalized.scores,
-                                title=f"Frame {self.metrics.frame_count} | Torso: {normalized.torso_length:.1f}px"
-                            )
-                            cv2.imshow("ESQUELETO NORMALIZADO", normalized_canvas)
-                        else:
-                            # Show invalid frame indicator
-                            black_canvas = np.zeros((500, 500, 3), dtype=np.uint8)
-                            cv2.putText(
-                                black_canvas,
-                                "Frame Invalido",
-                                (150, 250),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                1.2,
-                                (0, 0, 255),
-                                2
-                            )
-                            cv2.imshow("ESQUELETO NORMALIZADO", black_canvas)
-                    except Exception as e:
-                        print(f"[ERRO] Normalizacao: {e}")
+                        cv2.imshow(self.renderer.window_name + ' - SKELETON', sk_canvas)
+                    except Exception:
+                        pass
 
+                if self.spatial_norm_enabled and self.show_normalized:
+                    normalized_canvas = self._render_normalized_canvas(entidades)
+                    if normalized_canvas is not None:
+                        try:
+                            cv2.imshow(self.renderer.window_name + ' - NORMALIZED', normalized_canvas)
+                        except Exception:
+                            pass
+
+                # Controlos de teclado
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), ord("Q")):
                     break
@@ -342,13 +411,12 @@ class AntiTheftOrchestrator:
                     self.show_normalized = not self.show_normalized
                     state = "VISIVEL" if self.show_normalized else "OCULTO"
                     print(f"[NORMALIZADO] {state}")
-                if key in (ord("t"), ord("T")) and self.temporal_filter_enabled:
-                    # Toggle temporal filter on/off
-                    self.temporal_filter_enabled = not self.temporal_filter_enabled
-                    state = "ATIVO" if self.temporal_filter_enabled else "INATIVO"
+                if key in (ord("t"), ord("T")):
+                    self.temporal_filter.toggle()
+                    if not self.temporal_filter.is_enabled():
+                        self.temporal_filters_por_id.clear()
+                    state = "ATIVO" if self.temporal_filter.is_enabled() else "INATIVO"
                     print(f"[TEMPORAL] Filtro {state}")
-                    if not self.temporal_filter_enabled and self.temporal_filter is not None:
-                        self.temporal_filter.reset()
 
         finally:
             cap.release()

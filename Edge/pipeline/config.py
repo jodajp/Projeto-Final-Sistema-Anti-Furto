@@ -230,4 +230,4 @@ class AppConfig:
 
     def temporal_filter_config(self) -> Dict[str, Any]:
         """Get temporal filtering configuration."""
-        return self.data.get("temporal_filtering", {})
+        return self.data.get("temporal_filtering") or self.data.get("temporal_filter", {})

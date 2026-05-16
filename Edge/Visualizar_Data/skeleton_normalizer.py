@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Skeleton Normalization & Centering Module
 Provides utilities for normalizing and centering skeleton keypoints for video generation.

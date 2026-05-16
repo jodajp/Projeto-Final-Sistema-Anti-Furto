@@ -17,6 +17,14 @@ def _to_color(value, fallback):
         return tuple(int(v) for v in value)
     return fallback
 
+
+def _is_single_pose(keypoints) -> bool:
+    try:
+        array = np.asarray(keypoints)
+    except Exception:
+        return False
+    return array.ndim == 2 and array.shape == (17, 2)
+
 # Class para renderizar pose e informações na tela
 class PoseRenderer:
     def __init__(self, config: dict):
@@ -58,25 +66,45 @@ class PoseRenderer:
             cv2.circle(image, (x, y), 5, point_color, -1)
             cv2.circle(image, (x, y), 5, (0, 0, 0), 1)
 
+    def _iter_poses(self, keypoints, scores):
+        if keypoints is None or scores is None:
+            return []
+
+        if _is_single_pose(keypoints):
+            return [(np.asarray(keypoints), np.asarray(scores))]
+
+        keypoints_array = np.asarray(keypoints)
+        scores_array = np.asarray(scores)
+
+        if keypoints_array.ndim != 3 or keypoints_array.shape[1:] != (17, 2):
+            return []
+
+        if scores_array.ndim == 1:
+            scores_array = np.repeat(scores_array[np.newaxis, :], keypoints_array.shape[0], axis=0)
+
+        count = min(len(keypoints_array), len(scores_array))
+        return [(keypoints_array[i], scores_array[i]) for i in range(count)]
+
     def render(self, frame, keypoints, scores):
         if not self.enabled:
             return frame
 
         frame_vis = frame.copy()
-        if keypoints:
-            self._draw_pose(frame_vis, keypoints, scores, self.color_line, self.color_point)
+        poses = self._iter_poses(keypoints, scores)
+        for pose_keypoints, pose_scores in poses:
+            self._draw_pose(frame_vis, pose_keypoints, pose_scores, self.color_line, self.color_point)
 
         if not self.show_skeleton_canvas:
             return frame_vis
 
+        # Build separate canvas for skeletons but keep main frame size unchanged
         canvas = np.full_like(frame, 255)
-        if keypoints:
-            self._draw_pose(canvas, keypoints, scores, self.color_canvas_line, self.color_canvas_point)
+        for pose_keypoints, pose_scores in poses:
+            self._draw_pose(canvas, pose_keypoints, pose_scores, self.color_canvas_line, self.color_canvas_point)
 
-        h, w = frame.shape[:2]
-        left = cv2.resize(frame_vis, (w // 2, h // 2))
-        right = cv2.resize(canvas, (w // 2, h // 2))
-        return np.hstack([left, right])
+        # Store last canvas for external display; return full-size frame_vis so drawing coords remain valid
+        self.last_canvas = canvas
+        return frame_vis
 
     def draw_overlay(self, image, info_lines, alert_text=None, debug=False):
         if not self.enabled:
