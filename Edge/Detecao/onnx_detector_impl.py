@@ -1,12 +1,9 @@
 """
 ONNX detector using rtmlib with DirectML/WinML GPU support.
-Monkey-patches rtmlib to add DirectML backend for AMD/Intel/NVIDIA GPUs.
-Combines GPU speed with rtmlib's accurate postprocessing.
-Includes temporal smoothing for stable detection across frames.
+Returns all detected people as raw pose batches.
 """
 import numpy as np
 import platform
-from collections import deque
 
 
 class ONNXDetectorImpl:
@@ -84,13 +81,6 @@ class ONNXDetectorImpl:
         self.use_gpu = use_gpu
         self.device = device
         
-        # Temporal smoothing parameters
-        self.smoothing_factor = 0.4     # EMA factor (lower = more smoothing, 0-1)
-        self.prev_keypoints = None      # Previous frame keypoints for smoothing
-        self.prev_scores = None         # Previous frame scores
-        self.frame_buffer = deque(maxlen=3)  # Buffer last 3 frames for stability
-        self.detection_enabled = True   # Allow disabling detection if too unstable
-        
         # Apenas para debug
         if device == 'winml':
             self.provider_info = 'WinML/DirectML (AMD/Intel/NVIDIA)'
@@ -100,15 +90,14 @@ class ONNXDetectorImpl:
             self.provider_info = 'CPU (rtmlib optimized)'
         
         print(f"  [OK] ONNX pronto com rtmlib (Provider: {self.provider_info})")
-        print(f"  [INFO] Temporal smoothing enabled (factor={self.smoothing_factor})")
     
     def detect(self, frame):
         """
-        Detect pose keypoints using rtmlib with GPU + temporal smoothing.
+        Detect pose keypoints using rtmlib.
         
         Returns: (keypoints_list, scores)
-            - keypoints_list: list of [x, y] coordinates (temporally smoothed)
-            - scores: confidence scores [0.0-1.0]
+            - keypoints_list: list of people, each one a list of [x, y] coordinates
+            - scores: list of people, each one a list of confidence scores [0.0-1.0]
         """
         try:
             # rtmlib handles all preprocessing, inference, and postprocessing
@@ -118,86 +107,30 @@ class ONNXDetectorImpl:
             # scores shape = (num_people, 17)
             
             # Remove low-confidence detections per frame
-            valid_mask = scores.mean(axis=1) > 0.3  # Filter persons with avg confidence < 0.3
+            valid_mask = scores.mean(axis=1) > 0.05  # Filter persons with avg confidence < 0.05
             keypoints = keypoints[valid_mask]
             scores = scores[valid_mask]
             
-            # Nenhuma deteção confiável, retorna última detecção estável
+            # Nenhuma deteção confiável
             if len(keypoints) == 0:
-                if self.prev_keypoints is not None:
-                    return self.prev_keypoints, self.prev_scores
                 return [], []
-            
-            ###################
-            # Esta parte esta apenas pronta para lidar com 1 pessoa em vez de múltiplas
-            # TODO: Implementar lógica para lidar com múltiplas pessoas (tracking, associação, etc)
-            ###################
-            
-            # Select best person (highest average confidence)
-            person_confidences = scores.mean(axis=1)
-            best_person_idx = np.argmax(person_confidences)
-            best_kpts = keypoints[best_person_idx]      # [17, 2]
-            best_scores = scores[best_person_idx]       # [17]
-            
-            # Apply temporal smoothing (EMA filter)
-            if self.prev_keypoints is not None:
-                # Exponential Moving Average smoothing
-                best_kpts = (
-                    self.smoothing_factor * best_kpts + 
-                    (1 - self.smoothing_factor) * np.array(self.prev_keypoints)
-                )
-            
-            # Validate stability - check if scale changed drastically
-            if self.prev_keypoints is not None:
-                prev_scale = self._estimate_scale(self.prev_keypoints)
-                curr_scale = self._estimate_scale(best_kpts)
-                
-                scale_ratio = curr_scale / (prev_scale + 1e-6)
-                
-                # If scale changed too much, reduce smoothing aggressively
-                if not (0.85 < scale_ratio < 1.15):  # Allow ±15% scale change
-                    # Use more smoothing to suppress outliers
-                    best_kpts = (
-                        0.2 * best_kpts + 
-                        0.8 * np.array(self.prev_keypoints)
-                    )
-            
-            # Convert to list format for compatibility
-            kpts_list = []
-            scores_list = []
-            
-            for idx, kpt in enumerate(best_kpts):
-                x, y = float(kpt[0]), float(kpt[1])
-                # Clip to frame bounds (safety)
-                x = max(0, min(x, frame.shape[1] - 1))
-                y = max(0, min(y, frame.shape[0] - 1))
-                kpts_list.append([x, y])
-                
-                # Get confidence score for this keypoint
-                conf = float(best_scores[idx]) if idx < len(best_scores) else 1.0
-                scores_list.append(conf)
-            
-            # Store for next frame smoothing
-            self.prev_keypoints = kpts_list
-            self.prev_scores = scores_list
-            
-            return kpts_list, scores_list
+
+            keypoints = np.asarray(keypoints, dtype=np.float32)
+            scores = np.asarray(scores, dtype=np.float32)
+
+            clipped_keypoints = np.clip(
+                keypoints,
+                [0.0, 0.0],
+                [frame.shape[1] - 1.0, frame.shape[0] - 1.0],
+            )
+
+            return clipped_keypoints.tolist(), scores.tolist()
         
         except Exception as e:
             print(f"[ERRO] ONNX detect: {e}")
             import traceback
             traceback.print_exc()
-            # Return previous detection if available
-            if self.prev_keypoints is not None:
-                return self.prev_keypoints, self.prev_scores
             return [], []
-    
-    def _estimate_scale(self, keypoints):
-        """Estimate skeleton scale from keypoint spread."""
-        kpts_array = np.array(keypoints)
-        x_range = kpts_array[:, 0].max() - kpts_array[:, 0].min()
-        y_range = kpts_array[:, 1].max() - kpts_array[:, 1].min()
-        return np.sqrt(x_range * y_range)  # Geometric mean-like measure
     
     def get_info(self):
         """Return detector metadata."""

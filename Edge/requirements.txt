@@ -79,3 +79,5 @@ urllib3==1.26.20
 wheel==0.46.3
 xtcocotools==1.14.3
 yapf==0.43.0
+bytetracker==0.3.2
+lap==0.5.13

@@ -1,7 +1,7 @@
 # Ignore all files in the Data directory
-Visualizar_Data/Data/*
-Visualizar_Data/Output/*
-Visualizar_Data/Manifests/*
+Edge/Visualizar_Data/Data/*
+Edge/Visualizar_Data/Output/*
+Edge/Visualizar_Data/Manifests/*
 
 # Python cache/artifacts
 __pycache__/
@@ -12,6 +12,10 @@ __pycache__/
 venv/
 env_anti_furto/
 mmpose_fix/
+venv_tracking/
 
 # Runtime output
-Alertas/eventos_*.json
+Edge/Alertas/history/eventos_*.json
+
+
+/Edge/Visualizar_Data/test_output

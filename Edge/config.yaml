@@ -25,18 +25,25 @@ detector:
     use_gpu: true
 
 activities:
-  - enabled: true
+  - enabled: false
+    plugin: Atividades_Suspeitas.shoplifting_detector:ShopliftingActivityDetector
+    params:
+      model_path: ./models/activity_classifier.pth
+      seq_length: 45
+      threshold: 0.50
+      cooldown_frames: 45
+  - enabled: false
     plugin: Atividades_Suspeitas.velocity_detector:VelocityDetector
     params:
       velocidade_maxima: 200.0
 
-  - enabled: true
+  - enabled: false
     plugin: Atividades_Suspeitas.posture_detector:PostureDetector
     params:
       agachamento_threshold: 0.6
       tempo_minimo: 5
 
-  - enabled: true
+  - enabled: false
     plugin: Atividades_Suspeitas.hand_proximity_detector:HandProximityDetector
     params:
       distancia_maxima: 150.0  
@@ -47,7 +54,7 @@ alerts:
     - enabled: true
       plugin: Alertas.alert_system:AlertSystem
       params:
-        pasta_alertas: ./alertas
+        pasta_alertas: ./Alertas/history/
         save_json: true
         verbose: true
 
@@ -84,3 +91,22 @@ spatial_normalization:
     debug_mode: true
     canvas_size: 500
     show_labels: true
+  bbox_padding:
+    x: 25
+    y: 35
+  default_class_id: 0.0
+
+# Phase 4: sequence classification (shoplifting vs normal)
+phase4:
+  sequence_length: 30
+  input_size: 34
+  hidden_size: 128
+  num_layers: 1
+  attention_size: 64
+  dropout: 0.1
+  learning_rate: 0.001
+  batch_size: 16
+  epochs: 30
+  weight_decay: 0.0
+  confidence_weighted_loss: true
+  device: null

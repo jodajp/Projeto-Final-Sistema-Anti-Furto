@@ -12,8 +12,9 @@ from .skeleton_visualizer import (
 )
 from .temporal_pose_filter import (
     TemporalPoseFilter,
-    TemporalPoseFilterConfig,
 )
+
+from .kinematic_features import KinematicConfig, KinematicFeatureExtractor
 
 __all__ = [
     "AppConfig",
@@ -24,5 +25,6 @@ __all__ = [
     "SkeletonVisualizer",
     "visualize_normalized_pose",
     "TemporalPoseFilter",
-    "TemporalPoseFilterConfig",
+    "KinematicConfig",
+    "KinematicFeatureExtractor",
 ]

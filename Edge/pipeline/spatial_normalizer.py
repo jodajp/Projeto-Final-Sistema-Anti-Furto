@@ -96,15 +96,34 @@ class SpatialNormalizer:
     Vectorized operations only—no Python loops over keypoints.
     """
     
-    def __init__(self, params: Optional[NormalizationParams] = None):
+    def __init__(self, config_source=None, params: Optional[NormalizationParams] = None):
         """
         Initialize normalizer.
         
         Args:
+            config_source: AppConfig-like object or dict with spatial_normalization settings.
             params: NormalizationParams with confidence thresholds.
-                   If None, uses defaults.
+                    If provided, takes precedence over config_source.
         """
-        self.params = params or NormalizationParams()
+        if params is None and isinstance(config_source, NormalizationParams):
+            params = config_source
+
+        if params is not None:
+            self.params = params
+        else:
+            spatial_cfg = {}
+            if config_source is not None:
+                getter = getattr(config_source, "data", None)
+                if isinstance(getter, dict):
+                    spatial_cfg = getter.get("spatial_normalization", {})
+                elif isinstance(config_source, dict):
+                    spatial_cfg = config_source.get("spatial_normalization", {})
+
+            self.params = NormalizationParams(
+                torso_confidence_threshold=spatial_cfg.get("torso_confidence_threshold", 0.5),
+                min_torso_length_px=spatial_cfg.get("min_torso_length_px", 10.0),
+                allow_invalid_torso=spatial_cfg.get("allow_invalid_torso", False),
+            )
         self._prev_valid_pose: Optional[NormalizedPose] = None
         rprint(
             f"[NORMALIZER] Initialized with torso_confidence_threshold="

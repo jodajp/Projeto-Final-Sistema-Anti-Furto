@@ -19,64 +19,19 @@ Architecture:
 Performance: <0.04ms per frame (fully vectorized NumPy)
 """
 
-from dataclasses import dataclass
 from typing import Optional, Tuple
 import numpy as np
 
 
-@dataclass
 class AdaptiveFilterState:
     """Adaptive temporal filter state (vectorized)."""
 
-    position: np.ndarray  # Shape (17, 2), current smoothed positions
-    velocity_smooth: np.ndarray  # Shape (17, 2), smoothed velocity
-    prev_position: np.ndarray  # Shape (17, 2), previous smoothed position
-    occlusion_frames: np.ndarray  # Shape (17,), occlusion counter per keypoint
-    frame_count: int = 0
-
-
-@dataclass
-class TemporalPoseFilterConfig:
-    """Configuration for temporal pose filtering with velocity-adaptive smoothing."""
-
-    enabled: bool = True
-    """Enable temporal filtering."""
-
-    smoothing_factor: float = 0.6
-    """EMA factor for SLOW/NORMAL movements [0, 1].
-    Applied when velocity <= rapid_movement_threshold.
-    Higher = more responsive, lower = smoother.
-    Default 0.6: Balanced jitter reduction for normal motion."""
-
-    smoothing_factor_fast: float = 0.85
-    """EMA factor for RAPID movements [0, 1].
-    Applied when velocity > rapid_movement_threshold.
-    Higher value = more responsive, lets quick motions through.
-    Default 0.85: Catches shoplifting grabs without dampening.
-    Typical range: 0.75-0.95."""
-
-    rapid_movement_threshold: float = 5.0
-    """Pixel-per-frame velocity threshold to trigger fast mode [px/frame].
-    If |velocity| > this: use smoothing_factor_fast (less smoothing)
-    If |velocity| <= this: use smoothing_factor (more smoothing)
-    Default 5.0 px/frame: Detects quick hand/arm grabs.
-    Typical range: 3.0-10.0 (higher = less adaptive)."""
-
-    velocity_smoothing: float = 0.3
-    """EMA factor for velocity smoothing [0, 1].
-    Controls how quickly acceleration ramps occur.
-    Lower = smoother, more natural movement."""
-
-    occlusion_confidence_threshold: float = 0.3
-    """Confidence threshold below which keypoint is considered occluded."""
-
-    max_occlusion_frames: int = 5
-    """Maximum frames to predict during occlusion before dropping."""
-
-    velocity_damping: float = 0.94
-    """Velocity decay during occlusion [0, 1].
-    Controls how quickly prediction fades.
-    0.94 = ~5% velocity loss per frame (natural deceleration)."""
+    def __init__(self, position: np.ndarray, velocity_smooth: np.ndarray, prev_position: np.ndarray, occlusion_frames: np.ndarray, frame_count: int = 0):
+        self.position = position
+        self.velocity_smooth = velocity_smooth
+        self.prev_position = prev_position
+        self.occlusion_frames = occlusion_frames
+        self.frame_count = frame_count
 
 
 class TemporalPoseFilter:
@@ -89,8 +44,23 @@ class TemporalPoseFilter:
     Key principle: Only predict what's actually hidden. Smooth what's visible.
     """
 
-    def __init__(self, config: TemporalPoseFilterConfig):
-        self.config = config
+    def __init__(self, config_source):
+        raw_config = {}
+        if config_source is not None:
+            getter = getattr(config_source, "temporal_filter_config", None)
+            if callable(getter):
+                raw_config = getter() or {}
+            elif isinstance(config_source, dict):
+                raw_config = config_source
+
+        self.enabled = bool(raw_config.get("enabled", True))
+        self.smoothing_factor = float(raw_config.get("smoothing_factor", 0.6))
+        self.smoothing_factor_fast = float(raw_config.get("smoothing_factor_fast", 0.85))
+        self.rapid_movement_threshold = float(raw_config.get("rapid_movement_threshold", 5.0))
+        self.velocity_smoothing = float(raw_config.get("velocity_smoothing", 0.3))
+        self.occlusion_confidence_threshold = float(raw_config.get("occlusion_confidence_threshold", 0.3))
+        self.max_occlusion_frames = int(raw_config.get("max_occlusion_frames", 5))
+        self.velocity_damping = float(raw_config.get("velocity_damping", 0.94))
         self.state: Optional[AdaptiveFilterState] = None
 
     def filter_pose(
@@ -108,6 +78,11 @@ class TemporalPoseFilter:
             - filtered_scores: Shape (17,), adjusted confidences
             - was_predicted: Shape (17,), boolean mask for predicted keypoints
         """
+
+        # If filter is disabled, return raw keypoints and scores with no predictions
+        if not self.enabled:
+            return keypoints.copy(), scores.copy(), np.zeros(17, dtype=bool)
+
         if keypoints.shape != (17, 2):
             raise ValueError(f"Expected keypoints shape (17, 2), got {keypoints.shape}")
         if scores.shape != (17,):
@@ -127,7 +102,7 @@ class TemporalPoseFilter:
         self.state.frame_count += 1
 
         # Visibility masks
-        visible = scores >= self.config.occlusion_confidence_threshold
+        visible = scores >= self.occlusion_confidence_threshold
         in_occlusion = self.state.occlusion_frames > 0
 
         # ===== PROCESS EACH KEYPOINT INDEPENDENTLY =====
@@ -152,13 +127,13 @@ class TemporalPoseFilter:
                 velocity_magnitude = np.linalg.norm(raw_velocity)
                 
                 # Choose smoothing factor based on movement speed
-                if velocity_magnitude > self.config.rapid_movement_threshold:
+                if velocity_magnitude > self.rapid_movement_threshold:
                     # RAPID MOVEMENT: Use high alpha to let motion through (less smoothing)
                     # This preserves quick shoplifting grabs, arm swipes, etc.
-                    alpha = self.config.smoothing_factor_fast
+                    alpha = self.smoothing_factor_fast
                 else:
                     # SLOW/NORMAL MOVEMENT: Use normal alpha for jitter reduction
-                    alpha = self.config.smoothing_factor
+                    alpha = self.smoothing_factor
                 
                 # Apply EMA smoothing with adaptive alpha
                 filtered_position[i] = (
@@ -166,7 +141,7 @@ class TemporalPoseFilter:
                 )
 
                 # Update velocity smoothing (separate EMA for smooth acceleration)
-                beta = self.config.velocity_smoothing
+                beta = self.velocity_smoothing
                 new_velocity_smooth[i] = (
                     beta * raw_velocity + (1.0 - beta) * self.state.velocity_smooth[i]
                 )
@@ -193,14 +168,14 @@ class TemporalPoseFilter:
 
                 # Apply velocity damping (natural deceleration)
                 # velocity *= 0.94 means ~5% velocity loss per frame
-                new_velocity_smooth[i] *= self.config.velocity_damping
+                new_velocity_smooth[i] *= self.velocity_damping
 
                 # Increment occlusion counter
                 self.state.occlusion_frames[i] += 1
                 was_predicted[i] = True
 
                 # Check if exceeded max occlusion duration
-                if self.state.occlusion_frames[i] > self.config.max_occlusion_frames:
+                if self.state.occlusion_frames[i] > self.max_occlusion_frames:
                     # Drop prediction: keypoint is now missing
                     self.state.occlusion_frames[i] = 0
                     filtered_scores[i] = 0.0
@@ -220,6 +195,13 @@ class TemporalPoseFilter:
     def reset(self):
         """Reset filter state (for new video or person)."""
         self.state = None
+
+    def is_enabled(self) -> bool:
+        return self.enabled
+
+    def toggle(self):
+        """Enable or disable the temporal filter."""
+        self.enabled = not self.enabled
 
     def get_state_info(self) -> dict:
         """Return debugging info about filter state."""
