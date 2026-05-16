@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   api_backend:
@@ -26,18 +25,35 @@ services:
     networks:
       - rede_cluster
 
-  base_dados:
-    image: postgres:15-alpine     
+  db_master:
+    image: bitnami/postgresql:latest
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: 123
-      POSTGRES_DB: antifurto_db
+      - POSTGRESQL_REPLICATION_MODE=master      # Master
+      - POSTGRESQL_REPLICATION_USER=repl_user   # Cria um utilizador só para fazer as cópias
+      - POSTGRESQL_REPLICATION_PASSWORD=senha_replica
+      - POSTGRESQL_USERNAME=admin               
+      - POSTGRESQL_PASSWORD=123
+      - POSTGRESQL_DATABASE=antifurto_db
     ports:
       - "5432:5432"
     networks:
       - rede_cluster
     volumes:
-      - dados_postgres:/var/lib/postgresql/data 
+      - dados_master:/bitnami/postgresql
+
+  db_replica:
+    image: bitnami/postgresql:latest
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=slave       # Slave
+      - POSTGRESQL_MASTER_HOST=db_master        # Indica o Master
+      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - POSTGRESQL_REPLICATION_USER=repl_user   # Usa o mesmo utilizador de cópia
+      - POSTGRESQL_REPLICATION_PASSWORD=senha_replica
+      - POSTGRESQL_PASSWORD=123
+    networks:
+      - rede_cluster
+    volumes:
+      - dados_replica:/bitnami/postgresql
 
 networks:
   rede_cluster:
@@ -45,7 +61,7 @@ networks:
     attachable: true 
 
 volumes:
-  dados_postgres:
-
+  dados_master:
+  dados_replica:
 
 # docker stack deploy -c docker-compose.yml teste_local | docker service ls
