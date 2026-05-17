@@ -74,6 +74,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "muted": [200, 200, 200],
         },
     },
+    "tracker": {
+        "track_thresh": 0.35,
+        "track_buffer": 90,
+        "match_thresh": 0.7,
+    },
     "temporal_filter": {
         "enabled": True,
         "smoothing_factor": 0.6,
@@ -199,6 +204,9 @@ class AppConfig:
 
     def visualization(self) -> Dict[str, Any]:
         return self.data["visualization"]
+
+    def tracker(self) -> Dict[str, Any]:
+        return self.data.get("tracker", {})
 
     def frame_skip(self) -> int:
         return int(self.data["runtime"].get("frame_skip", 2))

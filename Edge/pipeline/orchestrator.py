@@ -57,13 +57,13 @@ class AntiTheftOrchestrator:
 
         self.last_detection = ([], [])
         self.last_inference_ms = 0.0
-        self.frame = None
 
-        # Tuned tracker params for more persistent IDs
+        tracker_cfg = config.tracker()
         self.tracker = BYTETracker(
-            track_thresh=0.4,
-            track_buffer=60,
-            match_thresh=0.6,
+            track_thresh=float(tracker_cfg.get("track_thresh", 0.35)),
+            track_buffer=int(tracker_cfg.get("track_buffer", 90)),
+            match_thresh=float(tracker_cfg.get("match_thresh", 0.7)),
+            frame_rate=int(config.camera().get("fps", 30)),
         )
         self.last_tracked_objects = []
 
@@ -124,6 +124,72 @@ class AntiTheftOrchestrator:
         print("=" * 60)
         self.alert_dispatcher.print_summary()
 
+    @staticmethod
+    def _box_iou(box_a, box_b):
+        x1 = max(box_a[0], box_b[0])
+        y1 = max(box_a[1], box_b[1])
+        x2 = min(box_a[2], box_b[2])
+        y2 = min(box_a[3], box_b[3])
+
+        inter_w = max(0.0, x2 - x1)
+        inter_h = max(0.0, y2 - y1)
+        inter_area = inter_w * inter_h
+
+        area_a = max(0.0, box_a[2] - box_a[0]) * max(0.0, box_a[3] - box_a[1])
+        area_b = max(0.0, box_b[2] - box_b[0]) * max(0.0, box_b[3] - box_b[1])
+        union = area_a + area_b - inter_area
+        if union <= 0:
+            return 0.0
+        return inter_area / union
+
+    def _build_bbox(self, keypoints, scores, frame_shape, padding):
+        h_img, w_img = frame_shape[:2]
+        valid_mask = np.isfinite(keypoints).all(axis=1) & (scores > 0.2)
+        valid_mask &= (keypoints[:, 0] >= 0) & (keypoints[:, 0] < w_img)
+        valid_mask &= (keypoints[:, 1] >= 0) & (keypoints[:, 1] < h_img)
+
+        if np.sum(valid_mask) < 3:
+            valid_mask = np.isfinite(keypoints).all(axis=1)
+            valid_mask &= (keypoints[:, 0] >= 0) & (keypoints[:, 0] < w_img)
+            valid_mask &= (keypoints[:, 1] >= 0) & (keypoints[:, 1] < h_img)
+
+        if not np.any(valid_mask):
+            return None
+
+        valid_kpts = keypoints[valid_mask]
+        x_min, y_min = np.min(valid_kpts, axis=0)
+        x_max, y_max = np.max(valid_kpts, axis=0)
+
+        box_w = max(1.0, x_max - x_min)
+        box_h = max(1.0, y_max - y_min)
+        pad_x = max(float(padding.get('x', 25)), box_w * 0.12)
+        pad_y = max(float(padding.get('y', 35)), box_h * 0.18)
+
+        x1 = int(np.clip(x_min - pad_x, 0, w_img - 1))
+        y1 = int(np.clip(y_min - pad_y, 0, h_img - 1))
+        x2 = int(np.clip(x_max + pad_x, 0, w_img - 1))
+        y2 = int(np.clip(y_max + pad_y, 0, h_img - 1))
+
+        if x2 <= x1 or y2 <= y1:
+            return None
+
+        return [x1, y1, x2, y2, float(np.mean(scores[valid_mask])), 0.0]
+
+    def _deduplicate_entities(self, entidades, iou_threshold=0.85):
+        if len(entidades) < 2:
+            return entidades
+
+        entidades_ordenadas = sorted(entidades, key=lambda ent: ent['box'][4], reverse=True)
+        filtradas = []
+        for entidade in entidades_ordenadas:
+            is_duplicate = any(
+                self._box_iou(entidade['box'], kept['box']) >= iou_threshold
+                for kept in filtradas
+            )
+            if not is_duplicate:
+                filtradas.append(entidade)
+        return filtradas
+
     def _preparar_entidades(self, keypoints, scores, frame_shape):
         """Calcula bboxes para 1 ou N pessoas."""
         if keypoints is None or scores is None:
@@ -140,86 +206,53 @@ class AntiTheftOrchestrator:
         if scrs_arr.ndim == 1:
             scrs_arr = scrs_arr[np.newaxis, :]
 
-        h_img, w_img = frame_shape[:2]
         viz_cfg = self.config.visualization()
         padding = viz_cfg.get('bbox_padding', {'x': 25, 'y': 35})
-        conf_min = viz_cfg.get('confidence_threshold', 0.3)
-
         entidades = []
         for scrs, kpts in zip(scrs_arr, kpts_arr):
-            # Filter keypoints: must have valid coordinates and confidence > 0.2
-            valid_mask = (scrs > 0.2) & np.isfinite(kpts).all(axis=1)
-            valid_mask = valid_mask & (kpts[:, 0] > 0) & (kpts[:, 0] < w_img)
-            valid_mask = valid_mask & (kpts[:, 1] > 0) & (kpts[:, 1] < h_img)
-            
-            if not np.any(valid_mask):
+            bbox = self._build_bbox(kpts, scrs, frame_shape, padding)
+            if bbox is None:
                 continue
-            
-            kpts_valid = kpts[valid_mask]
-            x_min, y_min = np.min(kpts_valid, axis=0)
-            x_max, y_max = np.max(kpts_valid, axis=0)
-
-            x1 = int(np.clip(x_min - padding['x'], 0, w_img - 1))
-            y1 = int(np.clip(y_min - padding['y'], 0, h_img - 1))
-            x2 = int(np.clip(x_max + padding['x'], 0, w_img - 1))
-            y2 = int(np.clip(y_max + padding['y'], 0, h_img - 1))
-
-            # Diagnostic print to help debug bbox placement (once)
-            if not getattr(self, '_debug_bbox_printed', False):
-                try:
-                    print(f"[DEBUG_BBOX] frame_shape=(w={w_img},h={h_img}), valid_kpts_min=({x_min:.1f},{y_min:.1f}), max=({x_max:.1f},{y_max:.1f}), box=({x1},{y1},{x2},{y2})")
-                except Exception:
-                    pass
-                self._debug_bbox_printed = True
 
             entidades.append({
                 'kpts': kpts.tolist(),
                 'scrs': scrs.tolist(),
-                'box': [x1, y1, x2, y2, float(np.mean(scrs[valid_mask])), 0.0],
-                'center_x': (x1 + x2) / 2,
-                'center_y': (y1 + y2) / 2,
+                'box': bbox,
                 'id': '...'
             })
-        return entidades
+        return self._deduplicate_entities(entidades)
 
     def _atribuir_ids(self, entidades):
-        """Atribui IDs do ByteTrack às entidades usando distância 2D para melhor rastreamento."""
+        """Atribui IDs do ByteTrack às entidades usando IoU com as caixas rastreadas."""
         if not entidades or self.last_tracked_objects is None or len(self.last_tracked_objects) == 0:
             return
 
-        objetos_tracker = []
-        for obj in self.last_tracked_objects:
-            if hasattr(obj, 'track_id'):
-                track_id = obj.track_id
-                tx1, tx2, ty1, ty2 = float(obj.tlbr[0]), float(obj.tlbr[2]), float(obj.tlbr[1]), float(obj.tlbr[3])
-            else:
-                tx1, tx2, ty1, ty2, track_id = float(obj[0]), float(obj[2]), float(obj[1]), float(obj[3]), int(obj[4])
-            cx, cy = (tx1 + tx2) / 2, (ty1 + ty2) / 2
-            objetos_tracker.append({'id': track_id, 'center_x': cx, 'center_y': cy})
+        tracks = np.asarray(self.last_tracked_objects)
+        if tracks.size == 0:
+            return
 
-        # Dynamic max distance threshold based on frame width
-        if self.frame is not None and hasattr(self.frame, 'shape'):
-            try:
-                frame_w = int(self.frame.shape[1])
-            except Exception:
-                frame_w = 640
-        else:
-            frame_w = 640
-        max_match_dist = max(80, int(frame_w * 0.25))
-
-        # Greedy matching: assign nearest tracker to each entity and remove matched tracker
-        remaining = objetos_tracker.copy()
-        for entidade in entidades:
-            ex, ey = entidade['center_x'], entidade['center_y']
-            if not remaining:
+        track_boxes = []
+        for track in tracks:
+            if len(track) < 5:
                 continue
-            # find nearest
-            closest = min(remaining, key=lambda t: (ex - t['center_x'])**2 + (ey - t['center_y'])**2)
-            dist_sq = (ex - closest['center_x'])**2 + (ey - closest['center_y'])**2
-            if dist_sq < max_match_dist**2:
-                entidade['id'] = closest['id']
-                # remove to prevent duplicate assignment
-                remaining = [r for r in remaining if r['id'] != closest['id']]
+            track_boxes.append({
+                'box': [float(track[0]), float(track[1]), float(track[2]), float(track[3])],
+                'id': int(track[4]),
+            })
+
+        remaining = track_boxes.copy()
+        for entidade in entidades:
+            best_track = None
+            best_iou = 0.0
+            for track in remaining:
+                iou = self._box_iou(entidade['box'], track['box'])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_track = track
+
+            if best_track is not None and best_iou >= 0.15:
+                entidade['id'] = best_track['id']
+                remaining = [track for track in remaining if track['id'] != best_track['id']]
 
     def _processar_atividades(self, entidades, timestamp):
         """Executa a lógica de detecção de furto e grava na base de dados SQLite."""
@@ -341,7 +374,6 @@ class AntiTheftOrchestrator:
         try:
             while True:
                 ret, frame = cap.read()
-                self.frame = frame
                 if not ret:
                     break
 
