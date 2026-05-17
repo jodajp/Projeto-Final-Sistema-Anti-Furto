@@ -1,7 +1,7 @@
 
 services:
   api_backend:
-    image: api_backend_local:latest  # <--- APENAS TESTE LOCAL
+    image: goncalofcouto/api_backend:latest  # <--- APENAS TESTE LOCAL
     build: 
       context: ./Backend  
     ports:
@@ -17,7 +17,7 @@ services:
         condition: on-failure    
 
   dashboard_frontend:
-    image: dashboard_local:latest    
+    image: goncalofcouto/dashboard:latest    
     build: 
       context: ./dashboard-antifurto 
     ports:
