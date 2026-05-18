@@ -79,6 +79,7 @@ tracker:
 
 temporal_filtering:
   enabled: true
+  # Core smoothing parameters
   smoothing_factor: 0.6                      # EMA factor for slow/normal movements
   smoothing_factor_fast: 0.85                # EMA factor for rapid movements (shoplifting grabs)
   rapid_movement_threshold: 5.0              # px/frame threshold to trigger fast mode
@@ -86,6 +87,14 @@ temporal_filtering:
   occlusion_confidence_threshold: 0.3        # Threshold below which keypoint is occluded
   max_occlusion_frames: 5                    # Max frames to predict during occlusion
   velocity_damping: 0.94                     # Velocity decay during occlusion (0.94 = 6% loss/frame)
+  
+  # Skeletal constraint parameters
+  limb_stretch_threshold: 1.5                # Max allowed limb length ratio vs baseline (1.5 = 50% stretch)
+  # Feature toggles
+  enable_hierarchical_confidence: true       # If parent occluded, reduce children
+  
+  # Head & arm motion handling (NEW - user-requested fixes)
+  disable_head_prediction: true              # Don't predict eyes/nose when out of frame (drop instead)
 
 spatial_normalization:
   enabled: true
