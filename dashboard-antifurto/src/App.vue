@@ -8,7 +8,6 @@
     />
 
     <main class="main-area">
-      <!-- DASHBOARD -->
       <div v-if="currentView === 'dashboard'" class="page-content">
         <header class="page-header">
           <h1>Visão Geral do Sistema</h1>
@@ -19,7 +18,6 @@
         </div>
       </div>
 
-      <!-- HISTÓRICO -->
       <div v-if="currentView === 'alertas'" class="page-content">
         <header class="page-header">
           <h1>Histórico de Eventos</h1>
@@ -29,7 +27,6 @@
         </div>
       </div>
 
-      <!-- INFRAESTRUTURA -->
       <div v-if="currentView === 'cluster'" class="page-content">
         <header class="page-header">
           <h1>Gestão de Infraestrutura</h1>
@@ -37,6 +34,14 @@
         <div class="vertical-layout">
           <ClusterMetrics />
         </div>
+      </div>
+
+      <div v-if="currentView === 'login'" class="page-content">
+        <LoginView @navigate="currentView = $event" />
+      </div>
+
+      <div v-if="currentView === 'signup'" class="page-content">
+        <SignUpView @navigate="currentView = $event" />
       </div>
     </main>
   </div>
@@ -47,6 +52,10 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import SideBar from './components/SideBar.vue'
 import ClusterMetrics from './components/ClusterMetrics.vue'
 import AlertList from './components/AlertList.vue'
+
+// IMPORTS DAS NOVAS PÁGINAS QUE ESTAVAM EM FALTA:
+import LoginView from './components/LoginView.vue'
+import SignUpView from './components/SignUpView.vue'
 
 const currentView = ref('dashboard')
 const apiConnected = ref(false)
@@ -80,7 +89,6 @@ onUnmounted(() => {
 </script>
 
 <style>
-/* Manter os estilos globais de layout e fonte profissional */
 html, body, #app {
   margin: 0 !important;
   padding: 0 !important;

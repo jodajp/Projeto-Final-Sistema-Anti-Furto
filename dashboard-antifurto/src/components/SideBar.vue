@@ -23,6 +23,14 @@
       </button>
     </nav>
 
+    <div class="sidebar-auth">
+      <button 
+        :class="['nav-btn', { active: currentView === 'login' || currentView === 'signup' }]" 
+        @click="$emit('navigate', 'login')">
+        Login
+      </button>
+    </div>
+
     <div class="sidebar-footer">
       <div class="status-indicator">
         <span class="pulse-dot" :class="{ 'connected': apiConnected }"></span>
@@ -37,11 +45,11 @@ defineProps({
   currentView: String,
   apiConnected: Boolean
 })
-
 defineEmits(['navigate'])
 </script>
 
 <style scoped>
+/* Layout Base */
 .sidebar {
   width: 260px;
   background: linear-gradient(180deg, #1A4031 0%, #2A664F 100%);
@@ -52,32 +60,34 @@ defineEmits(['navigate'])
   height: 100vh;
 }
 
+/* Header */
 .sidebar-header {
   padding: 2rem 1.5rem;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.sidebar-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.subtitle {
+  font-size: 0.8rem;
+  color: #a8d5ba;
+  opacity: 0.8;
 }
 
-.sidebar-header h2 { 
-  margin: 0; 
-  font-size: 1.5rem; 
-  font-weight: 600; 
-  letter-spacing: 0.5px; 
-}
-
-.subtitle { 
-  font-size: 0.8rem; 
-  color: #a8d5ba; 
-  opacity: 0.8; 
-}
-
-.sidebar-nav {
-  flex: 1;
-  padding: 1.5rem 0;
+/* Navegação e Auth */
+.sidebar-nav, 
+.sidebar-auth {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
+.sidebar-nav { flex: 1; padding: 1.5rem 0; }
+.sidebar-auth { padding: 1rem 0; border-top: 1px solid rgba(255, 255, 255, 0.1); }
 
+/* Botões */
 .nav-btn {
   background: transparent;
   border: none;
@@ -90,23 +100,21 @@ defineEmits(['navigate'])
   font-weight: 500;
   width: 100%;
 }
-
 .nav-btn:hover {
-  background: rgba(255,255,255,0.1);
+  background: rgba(255, 255, 255, 0.1);
   color: white;
 }
-
 .nav-btn.active {
-  background: rgba(255,255,255,0.15);
+  background: rgba(255, 255, 255, 0.15);
   color: white;
   border-left: 4px solid #4ade80;
 }
 
+/* Footer e Status */
 .sidebar-footer {
   padding: 1.5rem;
-  background: rgba(0,0,0,0.15);
+  background: rgba(0, 0, 0, 0.15);
 }
-
 .status-indicator {
   display: flex;
   align-items: center;
@@ -114,16 +122,14 @@ defineEmits(['navigate'])
   font-size: 0.85rem;
   color: #ecfdf5;
 }
-
-.pulse-dot { 
-  width: 8px; 
-  height: 8px; 
-  border-radius: 50%; 
-  background-color: #ef4444; 
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #ef4444;
 }
-
-.pulse-dot.connected { 
-  background-color: #10b981; 
-  box-shadow: 0 0 8px #10b981; 
+.pulse-dot.connected {
+  background-color: #10b981;
+  box-shadow: 0 0 8px #10b981;
 }
 </style>
