@@ -42,12 +42,8 @@ def create_detector(backend_config: Dict[str, Any]) -> Any:
         if not model_path:
             raise ValueError("[ERRO] ONNX backend requer 'model_path'")
         
-        model_path_resolved = Path(model_path).expanduser().resolve()
-        if not model_path_resolved.exists():
-            raise FileNotFoundError(f"[ERRO] Modelo ONNX não encontrado: {model_path_resolved}")
-        
         use_gpu = backend_config.get('use_gpu', True)
-        return ONNXDetectorImpl(model_path=str(model_path_resolved), use_gpu=use_gpu)
+        return ONNXDetectorImpl(model_path=str(model_path), use_gpu=use_gpu)
     
     else:
         raise ValueError(f"[ERRO] Backend desconhecido: {backend_type}")

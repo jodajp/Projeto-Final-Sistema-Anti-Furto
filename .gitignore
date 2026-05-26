@@ -17,5 +17,8 @@ venv_tracking/
 # Runtime output
 Edge/Alertas/history/eventos_*.json
 
+Edge/models/hub/
 
 /Edge/Visualizar_Data/test_output
+
+/Metricas

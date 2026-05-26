@@ -27,93 +27,68 @@ import pickle
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-import yaml
-
 # Add root folder to sys.path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT_DIR))
 
 from Detecao.detector_factory import create_detector
 from pipeline.config import AppConfig
-from Visualizar_Data.skeleton_normalizer import SkeletonNormalizer, SkeletonNormConfig
+from pipeline.video_source import create_video_source
+from pipeline import SkeletonVisualizer, SpatialNormalizer
 
+DISPLAY_SCALE_HEIGHT = 700  # Max height for display window (pixels)
 
-# COCO 17 keypoint skeleton connections (limbs to draw)
-SKELETON_CONNECTIONS = [
-    (0, 1), (0, 2),           # nose -> eyes
-    (1, 3), (2, 4),           # eyes -> ears
-    (5, 6),                   # shoulders
-    (5, 7), (6, 8),           # shoulders -> elbows
-    (7, 9), (8, 10),          # elbows -> wrists
-    (11, 12),                 # hips (pelvis)
-    (5, 11), (6, 12),         # shoulders -> hips
-    (11, 13), (12, 14),       # hips -> knees
-    (13, 15), (14, 16),       # knees -> ankles
-]
 
 # Visualization colors (BGR format for OpenCV)
 COLOR_SKELETON_LINE = (0, 255, 255)   # Cyan
 COLOR_SKELETON_NODE = (0, 0, 255)     # Red
 COLOR_TEXT_HINT = (0, 255, 0)         # Green
 
-# Canvas configuration
-DISPLAY_SCALE_HEIGHT = 700  # Max height for display window (pixels)
-MIN_CONFIDENCE = 0.3        # Minimum confidence to draw keypoint
+def select_primary_person(keypoints: np.ndarray, scores: np.ndarray):
+    """Return the highest-confidence person pose from detector output."""
+    if keypoints is None or scores is None:
+        return None
 
-def draw_skeleton_on_canvas(keypoints: np.ndarray, scores: np.ndarray, 
-                           canvas_size: tuple = (1400, 800), 
-                           conf_threshold: float = 0.3, 
-                           rotation_mode: int = 0) -> np.ndarray:
-    """
-    Render normalized skeleton keypoints onto a blank canvas.
-    
-    Args:
-        keypoints: Shape (17, 2), pixel coordinates from normalizer
-        scores: Shape (17,), confidence scores [0, 1]
-        canvas_size: (height, width) tuple matching normalizer canvas
-        conf_threshold: Minimum confidence to draw keypoint/limb
-        rotation_mode: 0=none, 1=90° CW, 2=180°, 3=90° CCW
-    
-    Returns:
-        Canvas image, shape (H, W, 3), BGR uint8
-    """
-    height, width = canvas_size
-    canvas = np.zeros((height, width, 3), dtype=np.uint8)
-    
-    if keypoints is None or len(keypoints) == 0:
-        return canvas
+    kpts_arr = np.asarray(keypoints, dtype=np.float32)
+    scores_arr = np.asarray(scores, dtype=np.float32)
 
-    # Draw skeleton limbs
-    for idx_from, idx_to in SKELETON_CONNECTIONS:
-        pt_from = keypoints[idx_from]
-        pt_to = keypoints[idx_to]
-        
-        if np.isnan(pt_from).any() or np.isnan(pt_to).any():
-            continue
-            
-        conf_avg = (scores[idx_from] + scores[idx_to]) / 2.0
-        if conf_avg < conf_threshold:
-            continue
-            
-        pt_from_int = tuple(map(int, pt_from))
-        pt_to_int = tuple(map(int, pt_to))
-        cv2.line(canvas, pt_from_int, pt_to_int, COLOR_SKELETON_LINE, thickness=2)
-        
-    # Draw skeleton keypoints (nodes)
-    for i, pt in enumerate(keypoints):
-        if np.isnan(pt).any() or scores[i] < conf_threshold:
-            continue
-        pt_int = tuple(map(int, pt))
-        cv2.circle(canvas, pt_int, radius=4, color=COLOR_SKELETON_NODE, thickness=-1)
-    
-    # Apply rotation correction
+    if kpts_arr.size == 0 or scores_arr.size == 0:
+        return None
+
+    if kpts_arr.ndim == 2:
+        if kpts_arr.shape != (17, 2) or scores_arr.shape != (17,):
+            return None
+        return kpts_arr, scores_arr
+
+    if kpts_arr.ndim != 3 or kpts_arr.shape[1:] != (17, 2):
+        return None
+
+    if scores_arr.ndim == 1 and scores_arr.shape == (17,):
+        scores_arr = np.repeat(scores_arr[np.newaxis, :], kpts_arr.shape[0], axis=0)
+
+    if scores_arr.ndim != 2 or scores_arr.shape[1] != 17:
+        return None
+
+    best_idx = int(np.argmax(scores_arr.mean(axis=1)))
+    return kpts_arr[best_idx], scores_arr[best_idx]
+
+
+def render_normalized_canvas(
+    visualizer: SkeletonVisualizer,
+    keypoints: np.ndarray,
+    scores: np.ndarray,
+    rotation_mode: int = 0,
+) -> np.ndarray:
+    """Render the normalized pose and optionally rotate the view."""
+    canvas = visualizer.render(keypoints, scores, title="")
+
     if rotation_mode == 1:
         canvas = cv2.rotate(canvas, cv2.ROTATE_90_CLOCKWISE)
     elif rotation_mode == 2:
         canvas = cv2.rotate(canvas, cv2.ROTATE_180)
     elif rotation_mode == 3:
         canvas = cv2.rotate(canvas, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        
+
     return canvas
 
 def main():
@@ -127,23 +102,22 @@ def main():
     # ======================================================================
     print("\n[1/4] Loading configuration and detector...")
     config_path = ROOT_DIR / "config.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
-        yaml_conf = yaml.safe_load(f)
-    
+    app_config = AppConfig.from_file(str(config_path))
+
     # Process every frame for high temporal resolution
-    yaml_conf['runtime']['frame_skip'] = 1 
-    
-    app_config = AppConfig(yaml_conf)
+    app_config.data["runtime"]["frame_skip"] = 1
+
     detector = create_detector(app_config.detector_config())
-    
-    # Configure skeleton normalization
-    norm_config = SkeletonNormConfig()
-    norm_config.apply_rotation_90deg = False  # Natural upright orientation
-    normalizer = SkeletonNormalizer(norm_config)
-    
-    # Default rotation mode (180° provides correct orientation + scale)
-    rotation_mode = 2
-    print("✓ Detector and normalizer ready")
+    normalizer = SpatialNormalizer(app_config)
+    skeleton_viz = SkeletonVisualizer(
+        canvas_size=700,
+        show_labels=False,
+        show_confidence=False,
+    )
+
+    # Default rotation mode (180° keeps the normalized canvas oriented for review)
+    rotation_mode = 0
+    print("✓ Detector and pipeline normalizer ready")
     
     # ======================================================================
     # Discover videos
@@ -174,7 +148,8 @@ def main():
     
     for video_idx, vid_path in enumerate(videos, start=1):
         print(f"\n  [{video_idx}/{len(videos)}] {vid_path.name}")
-        cap = cv2.VideoCapture(str(vid_path))
+        video_source = create_video_source({"id": str(vid_path)})
+        cap = video_source.open()
         
         orig_frames = []
         norm_keypoints_list = []
@@ -191,34 +166,22 @@ def main():
                 break
                 
             orig_frames.append(frame.copy())
-            
-            # Pose detection
-            kpts, scores = detector.detect(frame)
-            kpts = np.array(kpts)
-            scores = np.array(scores)
-            
-            # Single-person extraction (take person with highest avg confidence)
-            if kpts is not None and len(kpts) > 0:
-                if len(kpts.shape) == 3:  # (num_people, 17, 2)
-                    person_confidences = scores.mean(axis=1)
-                    best_idx = np.argmax(person_confidences)
-                    best_kpt = kpts[best_idx]
-                    best_score = scores[best_idx]
-                else:  # Already single person
-                    best_kpt = kpts
-                    best_score = scores
-                
-                # Normalize: combine to (17, 3) format [x, y, score]
-                combined_kpt = np.column_stack((best_kpt, best_score))
-                norm_kpt = normalizer.normalize_and_center(combined_kpt)
-                
-                # Extract normalized coordinates and scores
-                norm_keypoints_list.append(norm_kpt[:, :2])   # (17, 2)
-                scores_list.append(norm_kpt[:, 2])            # (17,)
+
+            detected = detector.detect(frame)
+            pose = select_primary_person(*detected) if detected else None
+
+            if pose is None:
+                norm_keypoints_list.append(np.full((17, 2), np.nan, dtype=np.float32))
+                scores_list.append(np.zeros(17, dtype=np.float32))
             else:
-                # No detection - use placeholder
-                norm_keypoints_list.append(np.zeros((17, 2)))
-                scores_list.append(np.zeros((17,)))
+                # Normalize pose using the shared pipeline normalizer -> pose[0] = keypoints, pose[1] = scores
+                normalized_pose = normalizer.normalize(pose[0], pose[1])
+                if normalized_pose.is_valid:
+                    norm_keypoints_list.append(normalized_pose.keypoints.astype(np.float32))
+                    scores_list.append(normalized_pose.scores.astype(np.float32))
+                else:
+                    norm_keypoints_list.append(np.full((17, 2), np.nan, dtype=np.float32))
+                    scores_list.append(np.zeros(17, dtype=np.float32))
                 
         cap.release()
         
@@ -232,7 +195,7 @@ def main():
         # ====================================================================
         print(f"  Playing video (press Y/N/Q or R to rotate)...")
         
-        canvas_h, canvas_w = norm_config.canvas_height, norm_config.canvas_width
+        canvas_h = skeleton_viz.canvas_size
         decision = None
         frame_idx = 0
         rotation_mode_local = rotation_mode
@@ -246,20 +209,17 @@ def main():
             scale = canvas_h / orig_h
             new_w = int(orig_w * scale)
             frame_resized = cv2.resize(frame, (new_w, canvas_h))
-            
-            # Draw normalized skeleton
-            skel_canvas = draw_skeleton_on_canvas(
-                norm_kpt, score, 
-                canvas_size=(canvas_h, canvas_w),
-                conf_threshold=MIN_CONFIDENCE,
-                rotation_mode=rotation_mode_local
+
+            skel_canvas = render_normalized_canvas(
+                skeleton_viz,
+                norm_kpt,
+                score,
+                rotation_mode=rotation_mode_local,
             )
-            
-            # Handle dimension swap from rotation
-            skel_h, skel_w = skel_canvas.shape[:2]
-            if skel_h != canvas_h:
-                skel_canvas = cv2.resize(skel_canvas, (canvas_w, canvas_h))
-            
+
+            if skel_canvas.shape[0] != canvas_h:
+                skel_canvas = cv2.resize(skel_canvas, (canvas_h, canvas_h))
+
             # Concatenate side-by-side
             side_by_side = np.hstack([frame_resized, skel_canvas])
             
@@ -301,7 +261,7 @@ def main():
         # ====================================================================
         if decision == 'keep':
             # Convert to PySkl format: (1, T, 17, 2) and (1, T, 17)
-            kpt_array = np.array(norm_keypoints_list)   # (T, 17, 2)
+            kpt_array = np.nan_to_num(np.array(norm_keypoints_list), nan=0.0)   # (T, 17, 2)
             score_array = np.array(scores_list)         # (T, 17)
             
             annotations.append({
