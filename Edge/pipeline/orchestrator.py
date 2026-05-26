@@ -81,6 +81,11 @@ class AntiTheftOrchestrator:
         self.node_id = os.getenv('NODE_ID', 'node1')  # Permite configurar node_id via variável de ambiente
         self.metricas_intervalo = 300  # Guardar métricas a cada 300 frames (~10 segundos a 30fps)
         self.ultimo_frame_metricas = 0
+        
+        # Configuração para stream de câmara web
+        self.frame_web_intervalo = 10  # Guardar frame web a cada 10 frames (~0.3 segundos a 30fps)
+        self.ultimo_frame_web = 0
+        self.frame_web_path = os.path.join(self.metricas_dir, 'last_frame.jpg')
 
 
     def _print_startup(self):
@@ -162,6 +167,25 @@ class AntiTheftOrchestrator:
             
         except Exception as e:
             print(f"[ERRO] Falha ao guardar métricas: {str(e)}")
+
+    def _guardar_frame_web(self, frame):
+        """Guarda o último frame processado para stream web."""
+        try:
+            # Redimensionar frame para não ficar muito grande (max 1280px de largura)
+            altura, largura = frame.shape[:2]
+            if largura > 1280:
+                escala = 1280 / largura
+                nova_largura = 1280
+                nova_altura = int(altura * escala)
+                frame_redimensionado = cv2.resize(frame, (nova_largura, nova_altura))
+            else:
+                frame_redimensionado = frame
+            
+            # Guardar em JPEG (qualidade 80% para balance entre tamanho e qualidade)
+            cv2.imwrite(self.frame_web_path, frame_redimensionado, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            
+        except Exception as e:
+            print(f"[AVISO] Falha ao guardar frame web: {str(e)}")
 
     @staticmethod
     def _box_iou(box_a, box_b):
@@ -456,6 +480,11 @@ class AntiTheftOrchestrator:
                 info_lines = self._build_info_lines(had_new_inference=should_infer)
                 self._desenhar_caixas(output, entidades)
                 self.renderer.draw_overlay(output, info_lines, alert_text=alert_text, debug=self.debug)
+
+                # Guardar frame para web periodicamente (após render)
+                if (self.metrics.frame_count - self.ultimo_frame_web) >= self.frame_web_intervalo:
+                    self._guardar_frame_web(output)
+                    self.ultimo_frame_web = self.metrics.frame_count
 
                 # Show three simple windows: main video, skeleton-only, normalized
                 cv2.imshow(self.renderer.window_name, output)
