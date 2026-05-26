@@ -8,6 +8,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from Edge.pipeline import AppConfig, ConfigError
 
+# pasta models
+pasta_especifica = "./models"
+os.environ['TORCH_HOME'] = pasta_especifica
+os.environ['XDG_CACHE_HOME'] = pasta_especifica
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sistema Anti-Furto (modular)")

@@ -36,6 +36,15 @@
         </div>
       </div>
 
+      <div v-if="currentView === 'camera'" class="page-content">
+        <header class="page-header">
+          <h1>Monitoramento de Câmara</h1>
+        </header>
+        <div class="vertical-layout">
+          <CameraView />
+        </div>
+      </div>
+
       <div v-if="currentView === 'login'" class="page-content">
         <LoginView @navigate="currentView = $event" />
       </div>
@@ -52,6 +61,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import SideBar from './components/SideBar.vue'
 import ClusterMetrics from './components/ClusterMetrics.vue'
 import AlertList from './components/AlertList.vue'
+import CameraView from './components/CameraView.vue'
 
 // IMPORTS DAS NOVAS PÁGINAS QUE ESTAVAM EM FALTA:
 import LoginView from './components/LoginView.vue'

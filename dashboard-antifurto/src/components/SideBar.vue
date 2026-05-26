@@ -21,6 +21,11 @@
         @click="$emit('navigate', 'cluster')">
         Infraestrutura
       </button>
+      <button 
+        :class="['nav-btn', { active: currentView === 'camera' }]" 
+        @click="$emit('navigate', 'camera')">
+        📹 Câmara
+      </button>
     </nav>
 
     <div class="sidebar-auth">

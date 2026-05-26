@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
@@ -296,3 +297,65 @@ def register_metrics(metricas_data: Dict[str, Any]):
             "status": "erro",
             "mensagem": f"Erro ao registar métricas: {str(e)}"
         }
+
+
+# ============ ENDPOINTS DE VIDEO/STREAM ============
+
+@app.get("/api/video/frame")
+def get_current_frame():
+    """
+    Retorna o último frame capturado em JPEG.
+    Usável em <img src="..."> ou fetch().
+    """
+    frame_path = os.path.join(METRICAS_DIR, 'last_frame.jpg')
+    
+    if not os.path.exists(frame_path):
+        return {
+            "erro": "Nenhum frame disponível",
+            "mensagem": "O Edge precisa estar em execução para gerar frames"
+        }
+    
+    try:
+        return FileResponse(frame_path, media_type="image/jpeg")
+    except Exception as e:
+        return {"erro": f"Erro ao servir frame: {str(e)}"}
+
+
+@app.get("/api/video/stream")
+def get_video_stream():
+    """
+    Retorna um stream MJPEG do feed de câmara.
+    Pode ser usado em tags <img> ou componentes de stream de vídeo.
+    
+    Uso em HTML:
+    <img src="http://localhost:8000/api/video/stream" />
+    """
+    frame_path = os.path.join(METRICAS_DIR, 'last_frame.jpg')
+    
+    def frame_generator():
+        """Gera frames JPEG continuamente para o stream MJPEG."""
+        while True:
+            try:
+                if os.path.exists(frame_path):
+                    with open(frame_path, 'rb') as f:
+                        frame_data = f.read()
+                    
+                    # Formato MJPEG
+                    yield (
+                        b'--frame\r\n'
+                        b'Content-Type: image/jpeg\r\n'
+                        b'Content-Length: ' + str(len(frame_data)).encode() + b'\r\n\r\n'
+                        + frame_data + b'\r\n'
+                    )
+                
+                # Pequena pausa para não sobrecarregar (atualizar a ~10-15fps)
+                import time
+                time.sleep(0.067)  # ~15fps
+            except Exception as e:
+                print(f"Erro no stream: {str(e)}")
+                break
+    
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )

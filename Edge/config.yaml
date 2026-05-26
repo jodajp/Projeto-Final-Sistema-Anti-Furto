@@ -21,8 +21,7 @@ detector:
     model_name: rtmpose-m_8xb256-420e_coco-256x192
     device: cpu
   onnx:
-    # https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/rtmo-m_16xb16-600e_body7-640x640-39e78cc4_20231211.zip
-    model_path: ./models/end2end.onnx
+    model_path: https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.zip
     use_gpu: true
 
 activities:
