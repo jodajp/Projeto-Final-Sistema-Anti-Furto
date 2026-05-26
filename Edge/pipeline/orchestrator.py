@@ -2,6 +2,10 @@ import time
 import cv2
 import numpy as np
 import torch
+import json
+import os
+from datetime import datetime
+from pathlib import Path
 
 from Alertas.database_handler import DatabaseHandler
 from bytetracker import BYTETracker
@@ -70,6 +74,13 @@ class AntiTheftOrchestrator:
         self.db = DatabaseHandler()
         # debug helper to print bbox/keypoint diagnostics once
         self._debug_bbox_printed = False
+        
+        # Configuração de guarda de métricas
+        self.metricas_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Metricas')
+        os.makedirs(self.metricas_dir, exist_ok=True)
+        self.node_id = os.getenv('NODE_ID', 'node1')  # Permite configurar node_id via variável de ambiente
+        self.metricas_intervalo = 300  # Guardar métricas a cada 300 frames (~10 segundos a 30fps)
+        self.ultimo_frame_metricas = 0
 
 
     def _print_startup(self):
@@ -123,6 +134,34 @@ class AntiTheftOrchestrator:
         print(f"Taxa de sucesso: {self.metrics.success_rate():.1f}%")
         print("=" * 60)
         self.alert_dispatcher.print_summary()
+
+    def _guardar_metricas(self):
+        """Guarda as métricas atuais em ficheiro JSON."""
+        try:
+            metricas_data = {
+                "node_id": self.node_id,
+                "timestamp": time.time(),
+                "fps": self.metrics.fps,
+                "frame_count": self.metrics.frame_count,
+                "detection_count": self.metrics.detection_count,
+                "inference_calls": self.metrics.inference_calls,
+                "average_inference_ms": self.metrics.average_inference_ms(),
+                "success_rate": self.metrics.success_rate(),
+                "uptime_seconds": self.metrics.uptime_seconds()
+            }
+            
+            # Criar nome do ficheiro com timestamp
+            timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+            ficheiro = os.path.join(self.metricas_dir, f"metricas_{self.node_id}_{timestamp_str}.json")
+            
+            # Guardar em JSON
+            with open(ficheiro, 'w', encoding='utf-8') as f:
+                json.dump(metricas_data, f, indent=2)
+            
+            print(f"[METRICAS] Guardadas para {self.node_id} (Frame {self.metrics.frame_count})")
+            
+        except Exception as e:
+            print(f"[ERRO] Falha ao guardar métricas: {str(e)}")
 
     @staticmethod
     def _box_iou(box_a, box_b):
@@ -382,6 +421,11 @@ class AntiTheftOrchestrator:
 
                 self.metrics.on_frame()
                 timestamp = time.time()
+                
+                # Guardar métricas periodicamente
+                if (self.metrics.frame_count - self.ultimo_frame_metricas) >= self.metricas_intervalo:
+                    self._guardar_metricas()
+                    self.ultimo_frame_metricas = self.metrics.frame_count
 
                 should_infer = (self.metrics.frame_count % self.metrics.frame_skip) == 0
                 if should_infer:
