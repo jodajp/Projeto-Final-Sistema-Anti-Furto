@@ -63,7 +63,7 @@ const isLoading = ref(true)
 const alertList = ref([])
 let fetchInterval = null
 
-const API_URL = 'http://127.0.0.1:8000/api/alertas/recentes'
+const API_URL = 'http://20.251.152.37:8000/api/metricas/cluster'
 
 const fetchAlerts = async () => {
   try {

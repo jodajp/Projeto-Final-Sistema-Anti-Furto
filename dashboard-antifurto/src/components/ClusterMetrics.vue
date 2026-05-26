@@ -123,7 +123,7 @@ const clusterMetrics = ref({})
 const nodes = ref([])
 let fetchInterval = null
 
-const API_URL = 'http://127.0.0.1:8000/api/metricas/cluster'
+const API_URL = 'http://20.251.152.37:8000/api/metricas/cluster'
 
 const formatUptime = (seconds) => {
   if (!seconds) return '0s'
