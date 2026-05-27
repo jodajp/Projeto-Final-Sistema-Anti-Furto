@@ -14,6 +14,7 @@ runtime:
   frame_skip: 2
   cache_result: true
   debug: false
+  api_url: "http://projeto-antifurto-vm1.norwayeast.cloudapp.azure.com:8000"  # Endereço da API na Cloud
 
 detector:
   type: onnx

@@ -1,7 +1,9 @@
 
 services:
   api_backend:
-    image: goncalofcouto/api_backend:latest  # <--- APENAS TESTE LOCAL
+    image: goncalofcouto/api_backend:latest
+    environm
+      - DATABASE_URL=postgresql://admin:123@db_master:5432/antifurto_db
     build: 
       context: ./Backend  
     ports:

@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import json
 import os
+import requests
 from datetime import datetime
 from pathlib import Path
 
@@ -141,7 +142,7 @@ class AntiTheftOrchestrator:
         self.alert_dispatcher.print_summary()
 
     def _guardar_metricas(self):
-        """Guarda as métricas atuais em ficheiro JSON."""
+        """Guarda as métricas atuais enviando-as para a Cloud via POST e salva um backup local."""
         try:
             metricas_data = {
                 "node_id": self.node_id,
@@ -155,18 +156,30 @@ class AntiTheftOrchestrator:
                 "uptime_seconds": self.metrics.uptime_seconds()
             }
             
-            # Criar nome do ficheiro com timestamp
+            # Endereço da tua API na Cloud (Idealmente vindo do config.yaml)
+            api_url = self.runtime_config.get("api_url", "http://127.0.0.1:8000")
+            registar_url = f"{api_url}/api/metricas/registar"
+            
+            # Tentar enviar para a BD (Cloud) via POST
+            try:
+                resposta = requests.post(registar_url, json=metricas_data, timeout=5)
+                if resposta.status_code == 200:
+                    print(f"[METRICAS] Publicadas na Cloud para {self.node_id} (Frame {self.metrics.frame_count})")
+                else:
+                    print(f"[METRICAS] Erro BD Cloud {resposta.status_code}: {resposta.text}")
+            except requests.exceptions.RequestException as req_err:
+                print(f"[METRICAS] Aviso: Falhou a comunicação com a API Cloud ({req_err}).")
+            
+            # Backup em JSON: Criar nome do ficheiro com timestamp
             timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
             ficheiro = os.path.join(self.metricas_dir, f"metricas_{self.node_id}_{timestamp_str}.json")
             
-            # Guardar em JSON
+            # Guardar backup em JSON
             with open(ficheiro, 'w', encoding='utf-8') as f:
                 json.dump(metricas_data, f, indent=2)
             
-            print(f"[METRICAS] Guardadas para {self.node_id} (Frame {self.metrics.frame_count})")
-            
         except Exception as e:
-            print(f"[ERRO] Falha ao guardar métricas: {str(e)}")
+            print(f"[ERRO] Falha ao publicar/guardar métricas: {str(e)}")
 
     def _guardar_frame_web(self, frame):
         """Guarda o último frame processado para stream web."""

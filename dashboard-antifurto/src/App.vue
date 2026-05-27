@@ -73,7 +73,7 @@ const isLoading = ref(true)
 const alertList = ref([])
 let fetchInterval = null
 
-const API_URL = 'http://20.251.152.37:8000/api/metricas/cluster'
+const API_URL = 'http://projeto-antifurto-vm1.norwayeast.cloudapp.azure.com:8000/api/metricas/cluster'
 
 const fetchAlerts = async () => {
   try {

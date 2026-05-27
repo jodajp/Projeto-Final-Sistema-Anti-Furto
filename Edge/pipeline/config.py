@@ -20,6 +20,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "frame_skip": 2,
         "cache_result": True,
         "debug": False,
+        "api_url": "http://projeto-antifurto-vm1.norwayeast.cloudapp.azure.com:8000",
     },
     "detector": {
         "type": "mmpose",

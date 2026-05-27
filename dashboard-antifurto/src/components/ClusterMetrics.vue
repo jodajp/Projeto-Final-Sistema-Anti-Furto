@@ -123,7 +123,7 @@ const clusterMetrics = ref({})
 const nodes = ref([])
 let fetchInterval = null
 
-const API_URL = 'http://20.251.152.37:8000/api/metricas/cluster'
+const API_URL = 'http://projeto-antifurto-vm1.norwayeast.cloudapp.azure.com:8000/api/metricas/cluster'
 
 const formatUptime = (seconds) => {
   if (!seconds) return '0s'
@@ -156,15 +156,24 @@ const getNodeStatusText = (node) => {
 const fetchClusterMetrics = async () => {
   isLoading.value = true
   try {
-    const response = await fetch(API_URL)
-    if (!response.ok) throw new Error('Erro na resposta da API')
+    const response = await fetch(API_URL, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+            // O CORS no backend já aceita tudo, mas é bom garantir
+        }
+    })
+    
+    if (!response.ok) throw new Error(`Erro na API: ${response.status}`)
+    
     const data = await response.json()
     
     clusterMetrics.value = data.cluster_metrics || {}
     nodes.value = data.nodes || []
+    
     apiConnected.value = true
   } catch (error) {
-    console.error('Erro ao buscar métricas:', error)
+    console.error('Erro de conexão:', error)
     apiConnected.value = false
     clusterMetrics.value = {}
     nodes.value = []
