@@ -109,7 +109,7 @@ class TemporalPoseFilter:
 
     def _is_head_keypoint(self, keypoint_idx: int) -> bool:
         """Check if keypoint is head (nose, eyes). Don't predict these."""
-        return keypoint_idx in [0, 1, 2]  # nose, left_eye, right_eye
+        return keypoint_idx in [0, 1, 2, 3, 4]  # nose, left_eye, right_eye, left_ear, right_ear
 
     def _compute_limb_lengths(self, keypoints: np.ndarray) -> np.ndarray:
         """Compute all limb lengths. Shape (num_limbs,)."""
