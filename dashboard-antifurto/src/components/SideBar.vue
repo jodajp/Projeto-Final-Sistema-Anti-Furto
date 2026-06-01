@@ -24,7 +24,7 @@
       <button 
         :class="['nav-btn', { active: currentView === 'camera' }]" 
         @click="$emit('navigate', 'camera')">
-        📹 Câmara
+        Câmara
       </button>
     </nav>
 
