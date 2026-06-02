@@ -45,6 +45,52 @@
       </div>
     </div>
 
+  <div class="infra-section">
+      <div class="section-header">
+        <h3>☁️ Estado da Infraestrutura (Docker Swarm)</h3>
+      </div>
+      
+      <div v-if="infraError" class="error-msg">
+        ⚠️ {{ infraError }}
+      </div>
+
+      <div v-else>
+        <div class="services-list">
+          <div v-for="svc in infraServices" :key="svc.id" class="service-card">
+            <div class="service-header">
+              <div class="service-info">
+                <div class="service-name">{{ svc.name }}</div>
+                <span class="service-id">{{ svc.id }}</span>
+              </div>
+              <button class="delete-btn" @click="deleteService(svc.id)" :title="`Eliminar ${svc.name}`">
+                🗑️ Apagar
+              </button>
+            </div>
+            
+            <div class="service-details">
+              <div class="detail">
+                <span class="detail-label">Modo</span>
+                <span class="detail-value">{{ svc.mode }}</span>
+              </div>
+              <div class="detail">
+                <span class="detail-label">Réplicas</span>
+                <span class="replica-badge" :class="{ 'healthy': svc.status === 'healthy' }">
+                  {{ svc.replicas_running }}/{{ svc.replicas_target }}
+                </span>
+              </div>
+              <div class="detail">
+                <span class="detail-label">Estado</span>
+                <span class="status-badge" :class="{ 'healthy': svc.status === 'healthy', 'failed': svc.status !== 'healthy' }">
+                  <span class="status-dot" :class="{ 'bg-green': svc.status === 'healthy', 'bg-red': svc.status !== 'healthy' }"></span>
+                  {{ svc.status === 'healthy' ? 'A Correr' : 'Falha' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Detalhes por Nó -->
     <div v-if="nodes.length > 0" class="nodes-section">
       <div class="section-header">
@@ -182,14 +228,60 @@ const fetchClusterMetrics = async () => {
   }
 }
 
+const infraServices = ref([])
+const infraError = ref(null)
+
+const INFRA_API_URL = 'http://20.251.152.37:8000/api/infra/services' 
+
+const fetchInfraStatus = async () => {
+  try {
+    const response = await fetch(INFRA_API_URL)
+    const data = await response.json()
+    
+    if (data.error) {
+      infraError.value = data.error
+      infraServices.value = []
+    } else {
+      infraServices.value = data
+      infraError.value = null
+    }
+  } catch (error) {
+    console.error('Erro na infraestrutura:', error)
+    infraError.value = 'Falha na comunicação com a API'
+  }
+}
+
+const deleteService = async (serviceId) => {
+  if (!confirm(`Tem a certeza que deseja eliminar este serviço?`)) return
+  
+  try {
+    const response = await fetch(`${INFRA_API_URL.replace('/api/infra/services', '')}/api/infra/services/${serviceId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    })
+    
+    if (!response.ok) throw new Error(`Erro ao eliminar: ${response.status}`)
+    
+    await fetchInfraStatus()
+  } catch (error) {
+    console.error('Erro ao eliminar serviço:', error)
+    infraError.value = 'Falha ao eliminar o serviço'
+  }
+}
+
+
 onMounted(() => {
+  if (fetchInterval) clearInterval(fetchInterval)
   fetchClusterMetrics()
-  fetchInterval = setInterval(fetchClusterMetrics, 5000) // Atualizar a cada 5 segundos
+  fetchInterval = setInterval(fetchClusterMetrics, 5000) 
+  fetchInfraStatus()
+  setInterval(fetchInfraStatus, 10000) // Atualizar a cada 10 segundos
 })
 
-onUnmounted(() => {
-  if (fetchInterval) clearInterval(fetchInterval)
-})
+
+
 </script>
 
 <style scoped>
@@ -279,6 +371,169 @@ onUnmounted(() => {
   color: #94a3b8;
 }
 
+/* Seção de Infraestrutura */
+.infra-section {
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  padding: 2rem;
+}
+
+.services-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.service-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.service-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.service-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.service-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.service-name {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.service-id {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-family: monospace;
+  letter-spacing: 0.5px;
+}
+
+.service-details {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.detail-label {
+  font-size: 0.7rem;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detail-value {
+  font-size: 0.95rem;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.replica-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.8rem;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.replica-badge.healthy {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.status-badge.healthy {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-badge.failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.bg-green {
+  background-color: #10b981;
+}
+
+.status-dot.bg-red {
+  background-color: #ef4444;
+}
+
+/* Botão Apagar */
+.delete-btn {
+  background-color: #ef4444;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.delete-btn:hover {
+  background-color: #dc2626;
+  box-shadow: 0 4px 8px rgba(220, 38, 38, 0.25);
+  transform: translateY(-1px);
+}
+
+.delete-btn:active {
+  background-color: #b91c1c;
+  transform: translateY(0);
+}
+
 /* Seção de Nós */
 .nodes-section {
   background: white;
@@ -320,7 +575,7 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 
-/* Lista de Nós */
+/* Seção de Infraestrutura */
 .nodes-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));

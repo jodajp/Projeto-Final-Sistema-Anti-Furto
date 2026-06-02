@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 import json
 import glob
+import httpx 
 from pathlib import Path
 import sys
 
@@ -239,3 +240,54 @@ def get_video_stream():
         frame_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
+# ============ CLUSTERS LIVE ============
+
+@app.get("/api/infra/services")
+async def get_infrastructure_status():
+    """Lê o estado real do Docker Swarm através do proxy interno."""
+    try:
+        # O proxy responde na porta 2375 dentro da rede do Docker
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # 1. Pede a lista de serviços
+            services_resp = await client.get("http://docker-proxy:2375/services")
+            services_resp.raise_for_status()
+            services_data = services_resp.json()
+
+            # 2. Pede a lista de contentores (tasks) para saber quantos estão mesmo a correr
+            tasks_resp = await client.get("http://docker-proxy:2375/tasks")
+            tasks_resp.raise_for_status()
+            tasks_data = tasks_resp.json()
+
+        infra_list = []
+        for s in services_data:
+            svc_id = s.get("ID", "")[:8]
+            name = s.get("Spec", {}).get("Name", "Desconhecido")
+            
+            # Verifica se é replicado ou global
+            mode_dict = s.get("Spec", {}).get("Mode", {})
+            mode = "replicated" if "Replicated" in mode_dict else "global"
+            
+            # Descobre qual é o objetivo (target) de réplicas
+            target_replicas = mode_dict.get("Replicated", {}).get("Replicas", 0) if mode == "replicated" else 1
+
+            # Conta quantas tarefas estão realmente a correr (Status = running) para este serviço
+            running_tasks = sum(
+                1 for t in tasks_data 
+                if t.get("ServiceID") == s.get("ID") and t.get("Status", {}).get("State") == "running"
+            )
+
+            infra_list.append({
+                "id": svc_id,
+                "name": name,
+                "mode": mode,
+                "replicas_running": running_tasks,
+                "replicas_target": target_replicas,
+                "status": "healthy" if running_tasks >= target_replicas else "degraded"
+            })
+
+        return infra_list
+
+    except Exception as e:
+        # Se falhar, devolve o erro para o Frontend tratar
+        return {"error": f"Falha ao conectar ao Swarm: {str(e)}"}

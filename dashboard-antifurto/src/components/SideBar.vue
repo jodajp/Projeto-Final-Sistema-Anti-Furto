@@ -26,6 +26,7 @@
         @click="$emit('navigate', 'camera')">
         Câmara
       </button>
+      
     </nav>
 
     <div class="sidebar-auth">
