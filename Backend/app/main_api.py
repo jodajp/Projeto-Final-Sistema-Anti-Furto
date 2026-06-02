@@ -9,9 +9,7 @@ import os
 import json
 import glob
 from pathlib import Path
-import subprocess
 import sys
-import platform
 
 # Importações dos teus módulos organizados
 from app.database import engine, Base, get_db
@@ -45,52 +43,6 @@ os.makedirs(METRICAS_DIR, exist_ok=True)
 @app.get("/")
 def read_root():
     return {"status": "A Corner Enterprise API está a correr a 100% com PostgreSQL!"}
-
-
-# ============ ENDPOINT PARA INICIAR SERVIÇOS ============
-
-@app.post("/api/services/start")
-def start_services():
-    """Inicia todos os serviços (API, Edge, Dashboard) em terminais separados."""
-    try:
-        script_path = os.path.join(BASE_DIR, 'start-services.ps1')
-        
-        if not os.path.exists(script_path):
-            return {
-                "status": "erro",
-                "mensagem": f"Script não encontrado em: {script_path}"
-            }
-        
-        # Executar o script PowerShell
-        if platform.system() == 'Windows':
-            # No Windows, usar PowerShell
-            process = subprocess.Popen(
-                [
-                    'powershell.exe',
-                    '-ExecutionPolicy', 'RemoteSigned',
-                    '-File', script_path
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NEW_CONSOLE
-            )
-            
-            return {
-                "status": "sucesso",
-                "mensagem": "Serviços iniciados! Verifique as janelas do PowerShell abiertas.",
-                "processo_id": process.pid
-            }
-        else:
-            return {
-                "status": "erro",
-                "mensagem": "Este sistema operativo não é suportado (requer Windows)"
-            }
-            
-    except Exception as e:
-        return {
-            "status": "erro",
-            "mensagem": f"Erro ao iniciar serviços: {str(e)}"
-        }
 
 
 # ============ ENDPOINTS DE ALERTAS (Mantidos por Ficheiro) ============
