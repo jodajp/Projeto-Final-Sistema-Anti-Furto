@@ -137,4 +137,88 @@ defineEmits(['navigate'])
   background-color: #10b981;
   box-shadow: 0 0 8px #10b981;
 }
+
+/* Responsivo para tablets */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 200px;
+  }
+  .sidebar-header {
+    padding: 1.5rem 1rem;
+  }
+  .sidebar-header h2 {
+    font-size: 1.2rem;
+  }
+  .nav-btn {
+    padding: 12px 16px;
+    font-size: 0.85rem;
+  }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .sidebar {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    padding: 1rem;
+  }
+  .sidebar-header {
+    flex: 1;
+    padding: 0;
+    border: none;
+    margin-right: 1rem;
+  }
+  .sidebar-header h2 {
+    font-size: 1.1rem;
+    margin-bottom: 0;
+  }
+  .subtitle {
+    display: none;
+  }
+  .sidebar-nav {
+    flex-direction: row;
+    flex: auto;
+    padding: 0;
+    gap: 0;
+  }
+  .sidebar-nav > * {
+    flex: 1;
+  }
+  .sidebar-auth {
+    padding: 0;
+    border: none;
+    margin-left: 0.5rem;
+  }
+  .nav-btn {
+    padding: 10px 8px;
+    font-size: 0.75rem;
+    text-align: center;
+    border-left: none;
+  }
+  .nav-btn.active {
+    border-bottom: 3px solid #4ade80;
+  }
+  .sidebar-footer {
+    display: none;
+  }
+}
+
+/* Mobile pequeno */
+@media (max-width: 480px) {
+  .sidebar {
+    padding: 0.75rem;
+  }
+  .sidebar-header {
+    margin-right: 0.5rem;
+  }
+  .sidebar-header h2 {
+    font-size: 1rem;
+  }
+  .nav-btn {
+    font-size: 0.65rem;
+    padding: 8px 4px;
+  }
+}
 </style>

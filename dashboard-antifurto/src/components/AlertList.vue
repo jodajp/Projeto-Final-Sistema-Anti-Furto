@@ -114,4 +114,79 @@ const getBadgeClass = (type) => {
 .badge-danger { background-color: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
 .badge-warning { background-color: #fef3c7; color: #d97706; border: 1px solid #fcd34d; }
 .badge-info { background-color: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; }
+
+/* Responsivo para tablets */
+@media (max-width: 1024px) {
+  .list-header {
+    padding: 10px 15px;
+    font-size: 0.8rem;
+  }
+  .list-row {
+    padding: 12px 15px;
+  }
+  .col-type { flex: 0 0 150px; }
+  .col-conf { flex: 0 0 80px; font-size: 0.85rem; }
+  .col-desc { font-size: 0.85rem; }
+  .col-time { flex: 0 0 80px; font-size: 0.8rem; }
+}
+
+/* Responsivo para mobile */
+@media (max-width: 768px) {
+  .list-container {
+    border-radius: 4px;
+  }
+  .list-header {
+    padding: 8px 12px;
+    font-size: 0.7rem;
+  }
+  .list-row {
+    padding: 10px 12px;
+    flex-wrap: wrap;
+  }
+  .list-body {
+    max-height: 50vh;
+  }
+  .col-type { 
+    flex: 0 0 100%; 
+    order: 1;
+  }
+  .col-conf { 
+    flex: 1;
+    order: 2;
+    font-size: 0.8rem;
+  }
+  .col-time { 
+    flex: 0 0 70px;
+    order: 3;
+    font-size: 0.75rem;
+  }
+  .col-desc { 
+    display: none;
+  }
+  .empty-state {
+    padding: 20px;
+    font-size: 0.85rem;
+  }
+}
+
+/* Mobile pequeno */
+@media (max-width: 480px) {
+  .list-header {
+    padding: 6px 10px;
+    font-size: 0.65rem;
+  }
+  .list-row {
+    padding: 8px 10px;
+  }
+  .list-body {
+    max-height: 45vh;
+  }
+  .col-type { font-size: 0.75rem; }
+  .col-conf { font-size: 0.7rem; }
+  .col-time { font-size: 0.65rem; }
+  .badge {
+    padding: 3px 6px;
+    font-size: 0.65rem;
+  }
+}
 </style>

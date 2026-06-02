@@ -299,16 +299,37 @@ onMounted(() => {
   word-break: break-all;
 }
 
-/* Responsivo */
+/* Responsivo para tablets */
+@media (max-width: 1024px) {
+  .camera-container {
+    padding: 1.5rem;
+  }
+  
+  .camera-header h2 {
+    font-size: 1.2rem;
+  }
+  
+  .stream-info {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+}
+
+/* Responsivo para mobile */
 @media (max-width: 768px) {
   .camera-container {
     padding: 1rem;
+    gap: 1rem;
   }
 
   .camera-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 1rem;
+    gap: 0.75rem;
+  }
+  
+  .camera-header h2 {
+    font-size: 1.1rem;
   }
 
   .camera-controls {
@@ -318,24 +339,61 @@ onMounted(() => {
 
   .stream-info {
     grid-template-columns: 1fr;
+    gap: 0.5rem;
   }
-
-  .modal-content {
-    width: 95%;
-    max-height: 90vh;
+  
+  .info-item .label {
+    font-size: 0.7rem;
   }
-
-  .progress-item {
-    flex-direction: column;
-    align-items: flex-start;
+  
+  .info-item .value {
+    font-size: 0.85rem;
   }
-
-  .modal-footer {
-    align-items: stretch;
+  
+  .info-item .value.mono {
+    font-size: 0.75rem;
   }
+}
 
-  .btn-cancel {
-    width: 100%;
+/* Mobile pequeno */
+@media (max-width: 480px) {
+  .camera-container {
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+  
+  .camera-header {
+    gap: 0.5rem;
+  }
+  
+  .camera-header h2 {
+    font-size: 1rem;
+  }
+  
+  .camera-stream-wrapper {
+    aspect-ratio: 4 / 3;
+  }
+  
+  .btn-refresh {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+  }
+  
+  .stream-status {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+  }
+  
+  .stream-info {
+    grid-template-columns: 1fr;
+  }
+  
+  .info-item .label {
+    font-size: 0.65rem;
+  }
+  
+  .info-item .value {
+    font-size: 0.75rem;
   }
 }
 </style>
