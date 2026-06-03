@@ -6,12 +6,15 @@ Verifica se os endpoints estão a funcionar corretamente
 
 import requests
 import json
+import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 # Configuração
 API_BASE_URL = "http://127.0.0.1:8000"
+REPO_ROOT = Path(__file__).resolve().parent
 COLORS = {
     'GREEN': '\033[92m',
     'RED': '\033[91m',
@@ -106,7 +109,7 @@ def test_endpoint_metricas_cluster():
         if response.status_code == 200:
             data = response.json()
             print_success(f"Endpoint respondendo")
-            metrics = data.get('cluster_metrics', {})
+            metrics = data.get('cluster_metrics') or {}
             print(f"  Métricas Agregadas:")
             print(f"    • Nós ativos: {metrics.get('num_nodes', 0)}")
             print(f"    • FPS médio: {metrics.get('media_fps', 0)}")
@@ -211,6 +214,52 @@ def test_endpoint_registar_metricas():
         print_error(f"Erro: {str(e)}")
         return False
 
+def api_is_running():
+    """Verifica se a API está a responder no porto esperado."""
+    try:
+        response = requests.get(f"{API_BASE_URL}/", timeout=1)
+        return response.status_code < 500
+    except requests.RequestException:
+        return False
+
+
+def ensure_api_server():
+    """Inicia a API automaticamente quando o servidor ainda não está em execução."""
+    if api_is_running():
+        print_info("Servidor API já está em execução.")
+        return True
+
+    print_info("Servidor API não encontrado. A iniciar automaticamente...")
+    command = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "app.main_api:app",
+        "--app-dir",
+        "Backend",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+    ]
+
+    try:
+        subprocess.Popen(command, cwd=REPO_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as exc:
+        print_error(f"Não foi possível iniciar o servidor: {exc}")
+        return False
+
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if api_is_running():
+            print_success("Servidor API iniciado com sucesso.")
+            return True
+        time.sleep(1)
+
+    print_error("O servidor API não respondeu dentro do tempo limite de 30 segundos.")
+    return False
+
+
 def generate_test_metrics():
     """Gera ficheiros de métricas de teste na pasta Metricas/"""
     print_header("Teste Extra: Gerar Métricas de Teste")
@@ -247,6 +296,10 @@ def generate_test_metrics():
 
 def run_all_tests():
     """Executa todos os testes"""
+    if not ensure_api_server():
+        print_error("Os testes não podem continuar porque a API não está disponível.")
+        return
+
     print(f"\n{COLORS['BLUE']}")
     print("╔════════════════════════════════════════════════════════════════════╗")
     print("║     TESTE COMPLETO DA API - SISTEMA ANTI-FURTO                    ║")
@@ -256,16 +309,16 @@ def run_all_tests():
     
     print_info(f"URL da API: {API_BASE_URL}")
     print_info("Certifique-se que o servidor está em execução:")
-    print_info("  cd Backend && uvicorn main_api:app --reload")
+    print_info("  cd Backend && python -m uvicorn app.main_api:app --host 127.0.0.1 --port 8000")
     
     tests = [
         ("Endpoint Raiz", test_endpoint_root),
         ("Alertas Recentes", test_endpoint_alertas),
         ("Métricas Atuais", test_endpoint_metricas_atuais),
+        ("Registar Métricas", test_endpoint_registar_metricas),
         ("Métricas do Cluster", test_endpoint_metricas_cluster),
         ("Métricas de Nó", test_endpoint_metricas_node),
         ("Histórico", test_endpoint_historico),
-        ("Registar Métricas", test_endpoint_registar_metricas),
     ]
     
     results = []

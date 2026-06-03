@@ -3,7 +3,8 @@ services:
   api_backend:
     image: goncalofcouto/api_backend:latest
     environment:
-      - DATABASE_URL=postgresql://admin:123@db_master:5432/antifurto_db
+      - DATABASE_URL_MASTER=postgresql://admin:123@db_master:5432/antifurto_db
+      - DATABASE_URL_REPLICA=postgresql://admin:123@db_replica:5432/antifurto_db
     build: 
       context: ./Backend  
     ports:
@@ -11,7 +12,8 @@ services:
     networks:
       - rede_cluster              
     deploy:
-      replicas: 2
+      replicas: 1
+      
       update_config:
         parallelism: 1
         delay: 10s

@@ -1,42 +1,42 @@
 import sqlite3
-import time
+import os
+
+DIR_ATUAL = os.path.dirname(os.path.abspath(__file__))
+# Recua uma pasta para a raiz do Edge
+PASTA_EDGE = os.path.dirname(DIR_ATUAL) 
+DB_PATH = os.path.join(PASTA_EDGE, "alertas_oficial.db")
 
 class DatabaseHandler:
-    def __init__(self, db_name="./Alertas/database_manager.db"):
-        """Inicializa a ligação e garante que a tabela existe."""
-        self.db_name = db_name
-        self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
-        self._create_table()
-
-    def _create_table(self):
-        """Cria a tabela de alertas se ela não existir."""
-        cursor = self.conn.cursor()
-        cursor.execute('''
+    def __init__(self):
+        # check_same_thread=False é crucial se o YOLO-Pose correr noutra thread
+        self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        
+        # Criação da tabela de buffer local
+        self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS alertas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT,
                 track_id INTEGER,
                 tipo_alerta TEXT,
-                confianca REAL
+                confianca REAL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                sincronizado INTEGER DEFAULT 0
             )
-        ''')
+        """)
         self.conn.commit()
 
     def salvar_alerta(self, track_id, tipo_alerta, confianca):
-        """Insere um novo alerta na base de dados."""
+        """
+        Guarda o alerta ESTRITAMENTE no SQLite local. 
+        Garante a resiliência no retalho: se não há internet, o dado não se perde.
+        """
         try:
-            timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S')
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT INTO alertas (timestamp, track_id, tipo_alerta, confianca)
-                VALUES (?, ?, ?, ?)
-            ''', (timestamp_str, track_id, tipo_alerta, round(confianca, 2)))
+            self.cursor.execute("""
+                INSERT INTO alertas (track_id, tipo_alerta, confianca, sincronizado) 
+                VALUES (?, ?, ?, 0)
+            """, (track_id, tipo_alerta, confianca))
             self.conn.commit()
             return True
         except Exception as e:
-            print(f"[ERRO DB] Falha ao salvar: {e}")
+            print(f"[ERRO SQLITE Edge] Falha ao guardar localmente: {e}")
             return False
-
-    def fechar(self):
-        """Fecha a ligação com segurança."""
-        self.conn.close()

@@ -38,7 +38,7 @@ activities:
     params:
       velocidade_maxima: 200.0
 
-  - enabled: false
+  - enabled: true
     plugin: Atividades_Suspeitas.posture_detector:PostureDetector
     params:
       agachamento_threshold: 0.6
