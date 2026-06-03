@@ -88,6 +88,9 @@ temporal_filtering:
   occlusion_confidence_threshold: 0.3        # Threshold below which keypoint is occluded
   max_occlusion_frames: 5                    # Max frames to predict during occlusion
   velocity_damping: 0.94                     # Velocity decay during occlusion (0.94 = 6% loss/frame)
+  head_smoothing_factor_slow: 0.75          # Head smoothing when motion is slow/stable
+  head_smoothing_factor_fast: 0.95          # Head response when motion is fast (reduce lag)
+  head_rapid_movement_threshold: 5.0        # Head fast-motion trigger in px/frame
   
   # Skeletal constraint parameters
   limb_stretch_threshold: 1.5                # Max allowed limb length ratio vs baseline (1.5 = 50% stretch)

@@ -116,9 +116,6 @@ class SkeletonVisualizer:
             if scores.shape != (17,):
                 raise ValueError(f"Expected scores shape (17,), got {scores.shape}")
         
-        # Check for NaN (invalid frame)
-        has_nan = np.isnan(normalized_keypoints).any()
-        
         # Create black canvas
         canvas = np.zeros(
             (self.canvas_size, self.canvas_size, 3),
@@ -132,21 +129,9 @@ class SkeletonVisualizer:
                 (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                COLOR_TEXT if not has_nan else COLOR_INVALID,
+                COLOR_TEXT,
                 1,
             )
-        
-        # If invalid, return blank canvas with message
-        if has_nan:
-            cv2.putText(
-                canvas, "INVALID FRAME (low torso confidence)",
-                (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                COLOR_INVALID,
-                1,
-            )
-            return canvas
         
         # ===== Scale normalized coordinates to pixel space =====
         kpts_px = self._normalize_to_pixels(normalized_keypoints)

@@ -16,7 +16,7 @@ These improvements specifically address:
 Performance: <0.08ms per frame (fully vectorized NumPy, negligible overhead)
 """
 
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 import numpy as np
 
 
@@ -50,6 +50,7 @@ class TemporalPoseFilter:
     stable when detector output drifts away from the body.
     
     Key principle: Only predict what's hidden. Smooth what's visible. Validate what's physical.
+    Head keypoints use a motion-aware response policy so they stay aligned during fast motion.
     """
 
     # COCO keypoint indices
@@ -76,12 +77,16 @@ class TemporalPoseFilter:
         14: [16],      # right_knee -> [right_ankle]
     }
 
+    HEAD_KEYPOINTS = (0, 1, 2, 3, 4)
+
     def __init__(self, config_source):
-        raw_config = {}
+        raw_config: dict[str, Any] = {}
         if config_source is not None:
             getter = getattr(config_source, "temporal_filter_config", None)
             if callable(getter):
-                raw_config = getter() or {}
+                getter_result = getter() or {}
+                if isinstance(getter_result, dict):
+                    raw_config = getter_result
             elif isinstance(config_source, dict):
                 raw_config = config_source
 
@@ -101,6 +106,11 @@ class TemporalPoseFilter:
 
         # Head motion parameters (user-requested)
         self.disable_head_prediction = bool(raw_config.get("disable_head_prediction", True))  # Don't predict eyes/nose
+        self.head_smoothing_factor_slow = float(raw_config.get("head_smoothing_factor_slow", 0.75))
+        self.head_smoothing_factor_fast = float(raw_config.get("head_smoothing_factor_fast", 0.95))
+        self.head_rapid_movement_threshold = float(
+            raw_config.get("head_rapid_movement_threshold", self.rapid_movement_threshold)
+        )
         self.last_constraint_violation_count = 0
 
         self.state: Optional[AdaptiveFilterState] = None
@@ -109,7 +119,7 @@ class TemporalPoseFilter:
 
     def _is_head_keypoint(self, keypoint_idx: int) -> bool:
         """Check if keypoint is head (nose, eyes). Don't predict these."""
-        return keypoint_idx in [0, 1, 2, 3, 4]  # nose, left_eye, right_eye, left_ear, right_ear
+        return keypoint_idx in self.HEAD_KEYPOINTS  # nose, left_eye, right_eye, left_ear, right_ear
 
     def _compute_limb_lengths(self, keypoints: np.ndarray) -> np.ndarray:
         """Compute all limb lengths. Shape (num_limbs,)."""
@@ -178,9 +188,14 @@ class TemporalPoseFilter:
         if affected_by_stretch:
             alpha = max(0.2, alpha - 0.3)  # Use much stronger smoothing
 
-        # Head tracking (eyes/nose) needs extra care for standing steal jitter
-        if keypoint_idx in [0, 1, 2]:  # nose, left_eye, right_eye
-            alpha = max(0.5, alpha)  # Extra smoothing for head
+        # Head tracking uses a motion-aware policy:
+        # keep it stable when motion is slow, but prioritize responsiveness when the
+        # whole body is moving quickly so the head does not trail behind.
+        if self._is_head_keypoint(keypoint_idx):
+            if velocity_magnitude > self.head_rapid_movement_threshold:
+                alpha = max(alpha, self.head_smoothing_factor_fast)
+            else:
+                alpha = max(alpha, self.head_smoothing_factor_slow)
 
         return alpha
 
@@ -273,31 +288,41 @@ class TemporalPoseFilter:
         for i in range(17):
             is_visible = visible[i]
             is_occluded = in_occlusion[i]
+            is_head = self._is_head_keypoint(i)
 
             if is_visible and not is_occluded:
                 raw_velocity = keypoints[i] - self.state.prev_position[i]
-                velocity_magnitude = np.linalg.norm(raw_velocity)
+                velocity_magnitude = float(np.linalg.norm(raw_velocity))
 
-                alpha = self._select_adaptive_smoothing_factor(
-                    i, velocity_magnitude, affected_by_stretch[i]
-                )
+                if is_head and self.disable_head_prediction and np.isnan(self.state.position[i]).any():
+                    # Re-entry after a dropped head joint: snap to the detector output
+                    # instead of blending with stale coordinates.
+                    filtered_position[i] = keypoints[i]
+                    new_velocity_smooth[i] = np.zeros(2, dtype=keypoints.dtype)
+                else:
+                    alpha = self._select_adaptive_smoothing_factor(
+                        i, velocity_magnitude, affected_by_stretch[i]
+                    )
 
-                filtered_position[i] = (
-                    alpha * keypoints[i] + (1.0 - alpha) * self.state.position[i]
-                )
+                    filtered_position[i] = (
+                        alpha * keypoints[i] + (1.0 - alpha) * self.state.position[i]
+                    )
 
-                beta = self.velocity_smoothing
-                new_velocity_smooth[i] = (
-                    beta * raw_velocity + (1.0 - beta) * self.state.velocity_smooth[i]
-                )
+                    beta = self.velocity_smoothing
+                    new_velocity_smooth[i] = (
+                        beta * raw_velocity + (1.0 - beta) * self.state.velocity_smooth[i]
+                    )
 
                 self.state.occlusion_frames[i] = 0
 
             # Se não for visível e não estiver em oclusão, tentamos prever.
             elif not is_visible and self.state.occlusion_frames[i] == 0:
                 # ===== HEAD KEYPOINTS: Don't predict, just drop =====
-                if self.disable_head_prediction and self._is_head_keypoint(i):
-                    # Don't predict head; just mark as missing
+                if self.disable_head_prediction and is_head:
+                    # Don't predict head; hide it entirely so the renderer does not
+                    # keep drawing stale coordinates for eyes/ears/nose.
+                    filtered_position[i] = np.array([np.nan, np.nan], dtype=keypoints.dtype)
+                    new_velocity_smooth[i] = np.zeros(2, dtype=keypoints.dtype)
                     self.state.occlusion_frames[i] = self.max_occlusion_frames + 1  # Force drop immediately
                     filtered_scores[i] = 0.0
                     was_predicted[i] = False
@@ -322,6 +347,8 @@ class TemporalPoseFilter:
                     filtered_scores[i] = 0.0
                     was_predicted[i] = False
                     new_velocity_smooth[i] = np.zeros(2)
+                    if self.disable_head_prediction and is_head:
+                        filtered_position[i] = np.array([np.nan, np.nan], dtype=keypoints.dtype)
                 else:
                     filtered_scores[i] = max(0.0, scores[i] * 0.5)
 

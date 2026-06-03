@@ -89,6 +89,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "occlusion_confidence_threshold": 0.3,
         "max_occlusion_frames": 5,
         "velocity_damping": 0.94,
+        "head_smoothing_factor_slow": 0.75,
+        "head_smoothing_factor_fast": 0.95,
+        "head_rapid_movement_threshold": 5.0,
     },
 }
 
