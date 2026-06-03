@@ -118,4 +118,76 @@ defineEmits(['navigate'])
   color: #059669 !important; 
   text-decoration: underline; 
 }
+
+/* Responsivo para tablets */
+@media (max-width: 1024px) {
+  .auth-card {
+    padding: 30px;
+  }
+  .auth-header h2 {
+    font-size: 1.3rem;
+  }
+}
+
+/* Responsivo para mobile */
+@media (max-width: 768px) {
+  .auth-card {
+    width: 95%;
+    padding: 25px;
+  }
+  .auth-header h2 {
+    font-size: 1.2rem;
+  }
+  .auth-header p {
+    font-size: 0.85rem;
+  }
+  .form-input {
+    font-size: 0.9rem;
+    padding: 10px 12px;
+  }
+  .auth-submit-btn {
+    padding: 10px;
+    font-size: 0.95rem;
+  }
+}
+
+/* Mobile pequeno */
+@media (max-width: 480px) {
+  .login-container {
+    padding: 1rem 0;
+  }
+  .auth-card {
+    width: 95%;
+    padding: 20px;
+    margin: 1rem auto;
+  }
+  .auth-header {
+    margin-bottom: 20px;
+  }
+  .auth-header h2 {
+    font-size: 1.1rem;
+  }
+  .auth-header p {
+    font-size: 0.8rem;
+  }
+  .auth-form {
+    gap: 14px;
+  }
+  .form-group {
+    gap: 4px;
+  }
+  .form-group label {
+    font-size: 0.85rem;
+  }
+  .form-input {
+    font-size: 0.85rem;
+    padding: 8px 10px;
+  }
+  .small-text {
+    font-size: 0.75rem;
+  }
+  .green-link {
+    font-size: 0.75rem;
+  }
+}
 </style>

@@ -15,7 +15,7 @@ class AlertSystem:
     
     def __init__(
         self,
-        pasta_alertas: str = './Alertas',
+        pasta_alertas: str = './Alertas/history',
         save_json: bool = True,
         verbose: bool = True,
     ):

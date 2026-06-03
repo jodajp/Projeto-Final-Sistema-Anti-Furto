@@ -4,10 +4,10 @@
       <h2>Feed de Câmara em Direto</h2>
       <div class="camera-controls">
         <button class="btn-refresh" @click="refreshStream" :disabled="!streamActive">
-          🔄 Atualizar
+          Atualizar
         </button>
         <span class="stream-status" :class="{ active: streamActive, inactive: !streamActive }">
-          {{ streamActive ? '● Em Direto' : '○ Offline' }}
+          {{ streamActive ? 'Em Direto' : 'Offline' }}
         </span>
       </div>
     </div>
@@ -28,12 +28,8 @@
       <!-- Estado: Offline -->
       <div v-else class="stream-placeholder offline">
         <div class="placeholder-content">
-          <div class="icon">📹</div>
           <p class="title">Câmara Offline</p>
           <p class="subtitle">O Edge não está em execução</p>
-          <button class="btn-try" @click="tryConnect">
-            Tentar Conectar
-          </button>
         </div>
       </div>
     </div>
@@ -65,15 +61,16 @@ const streamKey = ref(0)
 const streamActive = ref(false)
 const streamStatus = ref('Desconectado')
 const streamResolution = ref('Desconhecido')
+
 let checkInterval = null
 
 const handleStreamLoad = () => {
-  streamStatus.value = '✓ Ativo'
+  streamStatus.value = 'Ativo'
   streamActive.value = true
 }
 
 const handleStreamError = () => {
-  streamStatus.value = '✗ Erro de conexão'
+  streamStatus.value = 'Erro de conexão'
   streamActive.value = false
 }
 
@@ -90,14 +87,14 @@ const tryConnect = async () => {
     })
     if (response.ok) {
       streamActive.value = true
-      streamStatus.value = '✓ Conectado'
+      streamStatus.value = 'Conectado'
     } else {
       streamActive.value = false
-      streamStatus.value = '✗ Erro na API'
+      streamStatus.value = 'Erro na API'
     }
   } catch (error) {
     streamActive.value = false
-    streamStatus.value = '✗ Sem conexão'
+    streamStatus.value = 'Sem conexão'
   }
 }
 
@@ -109,7 +106,7 @@ const checkStreamAvailability = async () => {
     if (response.ok) {
       if (!streamActive.value) {
         streamActive.value = true
-        streamStatus.value = '✓ Ativo'
+        streamStatus.value = 'Ativo'
       }
     } else {
       streamActive.value = false
@@ -249,12 +246,6 @@ onMounted(() => {
   color: #cbd5e1;
 }
 
-.placeholder-content .icon {
-  font-size: 4rem;
-  margin-bottom: 1rem;
-  opacity: 0.7;
-}
-
 .placeholder-content .title {
   margin: 0.5rem 0;
   font-size: 1.3rem;
@@ -266,23 +257,6 @@ onMounted(() => {
   margin: 0.5rem 0 1.5rem;
   font-size: 0.9rem;
   color: #94a3b8;
-}
-
-.btn-try {
-  padding: 0.7rem 1.5rem;
-  background: #3b82f6;
-  border: none;
-  border-radius: 4px;
-  color: white;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-try:hover {
-  background: #2563eb;
-  transform: translateY(-2px);
 }
 
 /* Info */
@@ -325,16 +299,37 @@ onMounted(() => {
   word-break: break-all;
 }
 
-/* Responsivo */
+/* Responsivo para tablets */
+@media (max-width: 1024px) {
+  .camera-container {
+    padding: 1.5rem;
+  }
+  
+  .camera-header h2 {
+    font-size: 1.2rem;
+  }
+  
+  .stream-info {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+}
+
+/* Responsivo para mobile */
 @media (max-width: 768px) {
   .camera-container {
     padding: 1rem;
+    gap: 1rem;
   }
 
   .camera-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 1rem;
+    gap: 0.75rem;
+  }
+  
+  .camera-header h2 {
+    font-size: 1.1rem;
   }
 
   .camera-controls {
@@ -344,6 +339,61 @@ onMounted(() => {
 
   .stream-info {
     grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  
+  .info-item .label {
+    font-size: 0.7rem;
+  }
+  
+  .info-item .value {
+    font-size: 0.85rem;
+  }
+  
+  .info-item .value.mono {
+    font-size: 0.75rem;
+  }
+}
+
+/* Mobile pequeno */
+@media (max-width: 480px) {
+  .camera-container {
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+  
+  .camera-header {
+    gap: 0.5rem;
+  }
+  
+  .camera-header h2 {
+    font-size: 1rem;
+  }
+  
+  .camera-stream-wrapper {
+    aspect-ratio: 4 / 3;
+  }
+  
+  .btn-refresh {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+  }
+  
+  .stream-status {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+  }
+  
+  .stream-info {
+    grid-template-columns: 1fr;
+  }
+  
+  .info-item .label {
+    font-size: 0.65rem;
+  }
+  
+  .info-item .value {
+    font-size: 0.75rem;
   }
 }
 </style>

@@ -57,6 +57,21 @@ services:
     volumes:
       - dados_replica:/bitnami/postgresql
 
+
+  docker-proxy:
+      image: tecnativa/docker-socket-proxy
+      environment:
+        - SERVICES=1
+        - TASKS=1
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock:ro 
+      networks:
+        - rede_cluster
+      deploy:
+        placement:
+          constraints:
+            - node.role == manager   
+
 networks:
   rede_cluster:
     driver: overlay   
