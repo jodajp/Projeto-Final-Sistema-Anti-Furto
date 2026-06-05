@@ -108,10 +108,10 @@
               
               <!-- Ações de Escala -->
               <div class="service-actions" v-if="svc.mode === 'replicated'">
-                <button class="action-btn stop" @click="scaleService(svc.id, 0)" title="Simular Falha (Parar)">
-                  ⏸ Parar
+                <button class="action-btn fail" @click="simularFalha(svc.id)" title="Simular Falha (Auto-Recuperação)">
+                  💥 Crash
                 </button>
-                <div class="scale-group">
+                <div class="scale-group" >
                   <button v-if="svc.replicas_target > 1" class="action-btn scale" @click="scaleService(svc.id, Math.max(1, svc.replicas_target - 1))" title="Reduzir Réplica (-)">
                     -
                   </button>
@@ -262,7 +262,6 @@ const fetchClusterMetrics = async () => {
         method: 'GET',
         headers: {
             'Content-Type': 'application/json',
-            // O CORS no backend já aceita tudo, mas é bom garantir
         }
     })
     
@@ -322,8 +321,8 @@ const fetchInfraNodes = async () => {
   }
 }
 
-const scaleService = async (serviceId, replicas) => {
-  const actionText = replicas === 0 ? 'PARAR (reduzir a 0 réplicas)' : `escalar para ${replicas} réplica(s)`
+const scaleService = async (serviceId, replicas, isStart = false) => {
+  const actionText = replicas === 0 ? 'PARAR (reduzir a 0 réplicas)' : (isStart ? 'LIGAR (iniciar 1 réplica)' : `escalar para ${replicas} réplica(s)`)
   if (!confirm(`Tem a certeza que deseja ${actionText} este serviço?`)) return
   
   try {
@@ -341,6 +340,25 @@ const scaleService = async (serviceId, replicas) => {
   } catch (error) {
     console.error('Erro ao escalar serviço:', error)
     infraError.value = 'Falha ao alterar as réplicas do serviço'
+  }
+}
+
+const simularFalha = async (serviceId) => {
+  console.log("A tentar matar o serviço:", serviceId);
+  if (!confirm('ATENÇÃO: Isto vai matar uma réplica real para testar o Auto-Healing. Continuar?')) return
+  
+  try {
+    const response = await fetch(`${INFRA_API_URL}/${serviceId}/simular_falha`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    
+    if (!response.ok) throw new Error('Falha ao simular crash')
+    alert('Crash enviado! Observa o estado no Swarm.')
+    fetchInfraStatus() // Atualiza a UI imediatamente
+  } catch (error) {
+    console.error('Erro:', error)
+    alert('Erro ao tentar simular falha.')
   }
 }
 
@@ -660,6 +678,25 @@ onMounted(() => {
 }
 
 .action-btn.stop:active {
+  transform: translateY(0);
+}
+
+.action-btn.start {
+  background-color: #d1fae5;
+  color: #065f46;
+  border-color: #a7f3d0;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.action-btn.start:hover {
+  background-color: #10b981;
+  color: white;
+  border-color: #059669;
+  transform: translateY(-1px);
+}
+
+.action-btn.start:active {
   transform: translateY(0);
 }
 
