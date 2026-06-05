@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 from pydantic import BaseModel
+import httpx
 
 # Importações corretas com o Splitting de Leitura/Escrita
 from app.database import engine_master, Base, get_db_master, get_db_replica
@@ -107,32 +108,42 @@ def get_current_metrics(db: Session = Depends(get_db_replica)):
 
 @app.get("/api/metricas/cluster", response_model=MetricasClusterResponse)
 def get_cluster_metrics(db: Session = Depends(get_db_replica)):
-    subquery = db.query(
-        MetricaNodeModel.node_id, 
-        func.max(MetricaNodeModel.id).label("max_id")
-    ).group_by(MetricaNodeModel.node_id).subquery()
+    try:
+        subquery = db.query(
+            MetricaNodeModel.node_id, 
+            func.max(MetricaNodeModel.id).label("max_id")
+        ).group_by(MetricaNodeModel.node_id).subquery()
 
-    metricas_atuais = db.query(MetricaNodeModel).join(subquery, MetricaNodeModel.id == subquery.c.max_id).all()
+        metricas_atuais = db.query(MetricaNodeModel).join(subquery, MetricaNodeModel.id == subquery.c.max_id).all()
 
-    if not metricas_atuais:
+        # Proteção contra lista vazia
+        if not metricas_atuais or len(metricas_atuais) == 0:
+            return {"cluster_metrics": None, "nodes": [], "timestamp": datetime.now().isoformat()}
+
+        count = len(metricas_atuais)
+        
+        # Cálculos protegidos
+        total_fps = sum(m.fps or 0 for m in metricas_atuais)
+        media_inferencia = sum(m.average_inference_ms or 0 for m in metricas_atuais) / count
+        media_sucesso = sum(m.success_rate or 0 for m in metricas_atuais) / count
+
+        summary = ClusterMetricsSummary(
+            num_nodes=count,
+            media_fps=round(total_fps / count, 2),
+            total_frames=sum(m.frame_count or 0 for m in metricas_atuais),
+            total_detections=sum(m.detection_count or 0 for m in metricas_atuais),
+            total_inference_calls=sum(m.inference_calls or 0 for m in metricas_atuais),
+            tempo_medio_inferencia_ms=round(media_inferencia, 2),
+            taxa_sucesso_media_pct=round(media_sucesso, 2),
+            uptime_maximo_segundos=int(max(m.uptime_seconds or 0 for m in metricas_atuais))
+        )
+
+        return {"cluster_metrics": summary, "nodes": metricas_atuais, "timestamp": datetime.now().isoformat()}
+
+    except Exception as e:
+
+        print(f"Erro crítico no endpoint de métricas: {e}")
         return {"cluster_metrics": None, "nodes": [], "timestamp": datetime.now().isoformat()}
-
-    total_fps = sum(m.fps for m in metricas_atuais)
-    media_inferencia = sum(m.average_inference_ms for m in metricas_atuais) / len(metricas_atuais)
-    media_sucesso = sum(m.success_rate for m in metricas_atuais) / len(metricas_atuais)
-
-    summary = ClusterMetricsSummary(
-        num_nodes=len(metricas_atuais),
-        media_fps=round(total_fps / len(metricas_atuais), 2),
-        total_frames=sum(m.frame_count for m in metricas_atuais),
-        total_detections=sum(m.detection_count for m in metricas_atuais),
-        total_inference_calls=sum(m.inference_calls for m in metricas_atuais),
-        tempo_medio_inferencia_ms=round(media_inferencia, 2),
-        taxa_sucesso_media_pct=round(media_sucesso, 2),
-        uptime_maximo_segundos=int(max(m.uptime_seconds for m in metricas_atuais))
-    )
-
-    return {"cluster_metrics": summary, "nodes": metricas_atuais, "timestamp": datetime.now().isoformat()}
 
 @app.get("/api/metricas/node/{node_id}")
 def get_node_metrics(node_id: str, db: Session = Depends(get_db_replica)):
@@ -172,3 +183,109 @@ def get_video_stream():
             except Exception:
                 break
     return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+# ============ CLUSTERS LIVE ============
+
+@app.get("/api/infra/services")
+async def get_infrastructure_status():
+    """Lê o estado real do Docker Swarm através do proxy interno."""
+    try:
+        # O proxy responde na porta 2375 dentro da rede do Docker
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # 1. Pede a lista de serviços
+            services_resp = await client.get("http://docker-proxy:2375/services")
+            services_resp.raise_for_status()
+            services_data = services_resp.json()
+
+            # 2. Pede a lista de contentores (tasks) 
+            tasks_resp = await client.get("http://docker-proxy:2375/tasks")
+            tasks_resp.raise_for_status()
+            tasks_data = tasks_resp.json()
+
+        infra_list = []
+        for s in services_data:
+            svc_id = s.get("ID", "")[:8]
+            name = s.get("Spec", {}).get("Name", "Desconhecido")
+            
+            # Verifica se é replicado ou global
+            mode_dict = s.get("Spec", {}).get("Mode", {})
+            mode = "replicated" if "Replicated" in mode_dict else "global"
+            
+            # Descobre qual é o objetivo (target) 
+            target_replicas = mode_dict.get("Replicated", {}).get("Replicas", 0) if mode == "replicated" else 1
+
+            # Conta quantas tarefas estão realmente a correr (Status = running) 
+            running_tasks = sum(
+                1 for t in tasks_data 
+                if t.get("ServiceID") == s.get("ID") and t.get("Status", {}).get("State") == "running"
+            )
+
+            infra_list.append({
+                "id": svc_id,
+                "name": name,
+                "mode": mode,
+                "replicas_running": running_tasks,
+                "replicas_target": target_replicas,
+                "status": "healthy" if running_tasks >= target_replicas else "degraded"
+            })
+
+        return infra_list
+
+    except Exception as e:
+        return {"error": f"Falha ao conectar ao Swarm: {str(e)}"}
+
+class ScaleRequest(BaseModel):
+    replicas: int
+
+@app.post("/api/infra/services/{service_id}/scale")
+async def scale_infrastructure_service(service_id: str, req: ScaleRequest):
+    """Escala (aumenta/reduz ou pára) as réplicas de um serviço do Docker Swarm."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Obter a especificação atual (Spec) e Versão
+            svc_resp = await client.get(f"http://docker-proxy:2375/services/{service_id}")
+            svc_resp.raise_for_status()
+            svc_data = svc_resp.json()
+            
+            spec = svc_data.get("Spec", {})
+            version = svc_data.get("Version", {}).get("Index")
+            
+            if "Replicated" not in spec.get("Mode", {}):
+                raise HTTPException(status_code=400, detail="Apenas serviços replicados podem ser escalados.")
+            
+            # Altera o número de réplicas
+            spec["Mode"]["Replicated"]["Replicas"] = req.replicas
+            
+            # Enviar de volta ao Swarm
+            update_resp = await client.post(
+                f"http://docker-proxy:2375/services/{service_id}/update?version={version}",
+                json=spec
+            )
+            update_resp.raise_for_status()
+        return {"status": "sucesso", "mensagem": f"Serviço {service_id} atualizado para {req.replicas} réplicas."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha ao alterar réplicas: {str(e)}")
+
+@app.get("/api/infra/nodes")
+async def get_infrastructure_nodes():
+    """Lê o estado real dos Nós (VMs) do Docker Swarm."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("http://docker-proxy:2375/nodes")
+            resp.raise_for_status()
+            nodes_data = resp.json()
+
+        nodes_list = []
+        for n in nodes_data:
+            nodes_list.append({
+                "id": n.get("ID", "")[:8],
+                "hostname": n.get("Description", {}).get("Hostname", "Desconhecido"),
+                "status": n.get("Status", {}).get("State", "unknown"),
+                "availability": n.get("Spec", {}).get("Availability", "unknown"),
+                "role": n.get("Spec", {}).get("Role", "unknown"),
+                "ip": n.get("Status", {}).get("Addr", "N/A")
+            })
+        return nodes_list
+    except Exception as e:
+        return {"error": f"Falha ao conectar ao Swarm (Nós): {str(e)}"}

@@ -1,9 +1,10 @@
 
 services:
   api_backend:
-    image: api_backend_local:latest 
+    image: goncalofcouto/api_backend:latest
     environment:
-      - DATABASE_URL=postgresql://admin:123@db_master:5432/antifurto_db 
+      - DATABASE_URL_MASTER=postgresql://admin:123@db_master:5432/antifurto_db
+      - DATABASE_URL_REPLICA=postgresql://admin:123@db_replica:5432/antifurto_db
     build: 
       context: ./Backend  
     ports:
@@ -12,6 +13,7 @@ services:
       - rede_cluster              
     deploy:
       replicas: 2
+      
       update_config:
         parallelism: 1
         delay: 10s
@@ -19,7 +21,7 @@ services:
         condition: on-failure    
 
   dashboard_frontend:
-    image: dashboard_local:latest    
+    image: goncalofcouto/dashboard:latest    
     build: 
       context: ./dashboard-antifurto 
     ports:
@@ -57,20 +59,21 @@ services:
     volumes:
       - dados_replica:/bitnami/postgresql
 
-
   docker-proxy:
       image: tecnativa/docker-socket-proxy
       environment:
         - SERVICES=1
         - TASKS=1
+        - NODES=1
+        - POST=1
       volumes:
-        - /var/run/docker.sock:/var/run/docker.sock:ro 
+        - /var/run/docker.sock:/var/run/docker.sock 
       networks:
         - rede_cluster
       deploy:
         placement:
           constraints:
-            - node.role == manager   
+            - node.role == manager 
 
 networks:
   rede_cluster:
