@@ -45,6 +45,49 @@
       </div>
     </div>
 
+    <!-- Máquinas Virtuais (Nós no Docker Swarm) -->
+    <div class="infra-section vms-section">
+      <div class="section-header">
+        <h3>🖥️ Máquinas Virtuais (Swarm Nodes)</h3>
+      </div>
+      
+      <div v-if="infraError" class="error-msg">
+        ⚠️ Falha na obtenção das VMs...
+      </div>
+
+      <div v-else>
+        <div class="services-list">
+          <div v-for="node in infraNodes" :key="node.id" class="service-card vms-card">
+            <div class="service-header vms-header">
+              <div class="service-info">
+                <div class="service-name">{{ node.hostname }}</div>
+                <span class="service-id">{{ node.id }}</span>
+              </div>
+              <span class="role-badge" :class="node.role">{{ node.role }}</span>
+            </div>
+            
+            <div class="service-details">
+              <div class="detail">
+                <span class="detail-label">IP (Rede)</span>
+                <span class="detail-value">{{ node.ip || '---' }}</span>
+              </div>
+              <div class="detail">
+                <span class="detail-label">Disponibilidade</span>
+                <span class="detail-value">{{ node.availability }}</span>
+              </div>
+              <div class="detail">
+                <span class="detail-label">Estado Node</span>
+                <span class="status-badge" :class="{ 'healthy': node.status === 'ready', 'failed': node.status !== 'ready' }">
+                  <span class="status-dot" :class="{ 'bg-green': node.status === 'ready', 'bg-red': node.status !== 'ready' }"></span>
+                  {{ node.status === 'ready' ? 'Pronto' : 'Falha' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   <div class="infra-section">
       <div class="section-header">
         <h3>☁️ Estado da Infraestrutura (Docker Swarm)</h3>
@@ -62,9 +105,22 @@
                 <div class="service-name">{{ svc.name }}</div>
                 <span class="service-id">{{ svc.id }}</span>
               </div>
-              <button class="delete-btn" @click="deleteService(svc.id)" :title="`Eliminar ${svc.name}`">
-                🗑️ Apagar
-              </button>
+              
+              <!-- Ações de Escala -->
+              <div class="service-actions" v-if="svc.mode === 'replicated'">
+                <button class="action-btn stop" @click="scaleService(svc.id, 0)" title="Simular Falha (Parar)">
+                  ⏸ Parar
+                </button>
+                <div class="scale-group">
+                  <button v-if="svc.replicas_target > 1" class="action-btn scale" @click="scaleService(svc.id, Math.max(1, svc.replicas_target - 1))" title="Reduzir Réplica (-)">
+                    -
+                  </button>
+                  <button class="action-btn scale" @click="scaleService(svc.id, svc.replicas_target + 1)" title="Aumentar Réplica (+)">
+                    +
+                  </button>
+                </div>
+              </div>
+
             </div>
             
             <div class="service-details">
@@ -229,9 +285,11 @@ const fetchClusterMetrics = async () => {
 }
 
 const infraServices = ref([])
+const infraNodes = ref([])
 const infraError = ref(null)
 
 const INFRA_API_URL = 'http://20.251.152.37:8000/api/infra/services' 
+const NODES_API_URL = 'http://20.251.152.37:8000/api/infra/nodes'
 
 const fetchInfraStatus = async () => {
   try {
@@ -251,23 +309,38 @@ const fetchInfraStatus = async () => {
   }
 }
 
-const deleteService = async (serviceId) => {
-  if (!confirm(`Tem a certeza que deseja eliminar este serviço?`)) return
+const fetchInfraNodes = async () => {
+  try {
+    const response = await fetch(NODES_API_URL)
+    const data = await response.json()
+    
+    if (!data.error) {
+      infraNodes.value = data
+    }
+  } catch (error) {
+    console.error('Erro nos Nós:', error)
+  }
+}
+
+const scaleService = async (serviceId, replicas) => {
+  const actionText = replicas === 0 ? 'PARAR (reduzir a 0 réplicas)' : `escalar para ${replicas} réplica(s)`
+  if (!confirm(`Tem a certeza que deseja ${actionText} este serviço?`)) return
   
   try {
-    const response = await fetch(`${INFRA_API_URL.replace('/api/infra/services', '')}/api/infra/services/${serviceId}`, {
-      method: 'DELETE',
+    const response = await fetch(`${INFRA_API_URL}/${serviceId}/scale`, {
+      method: 'POST',
       headers: {
         'Content-Type': 'application/json'
-      }
+      },
+      body: JSON.stringify({ replicas })
     })
     
-    if (!response.ok) throw new Error(`Erro ao eliminar: ${response.status}`)
+    if (!response.ok) throw new Error(`Erro ao escalar: ${response.status}`)
     
     await fetchInfraStatus()
   } catch (error) {
-    console.error('Erro ao eliminar serviço:', error)
-    infraError.value = 'Falha ao eliminar o serviço'
+    console.error('Erro ao escalar serviço:', error)
+    infraError.value = 'Falha ao alterar as réplicas do serviço'
   }
 }
 
@@ -277,7 +350,11 @@ onMounted(() => {
   fetchClusterMetrics()
   fetchInterval = setInterval(fetchClusterMetrics, 5000) 
   fetchInfraStatus()
-  setInterval(fetchInfraStatus, 10000) // Atualizar a cada 10 segundos
+  fetchInfraNodes()
+  setInterval(() => {
+    fetchInfraStatus()
+    fetchInfraNodes()
+  }, 10000) // Atualizar a cada 10 segundos
 })
 
 
@@ -393,7 +470,7 @@ onMounted(() => {
   transition: all 0.3s ease;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  height: 100%;
 }
 
 .service-card:hover {
@@ -408,19 +485,23 @@ onMounted(() => {
   gap: 1rem;
   padding-bottom: 1rem;
   border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 1rem;
 }
 
 .service-info {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.3rem;
+  min-width: 0;
 }
 
 .service-name {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   font-weight: 700;
   color: #0f172a;
+  word-break: break-word;
+  line-height: 1.3;
 }
 
 .service-id {
@@ -433,37 +514,43 @@ onMounted(() => {
 .service-details {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 1rem;
+  gap: 0.75rem;
+  margin-top: auto;
+  align-items: flex-end;
 }
 
 .detail {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.4rem;
 }
 
 .detail-label {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   color: #64748b;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .detail-value {
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   color: #0f172a;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  height: 28px;
 }
 
 .replica-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0.4rem 0.8rem;
+  height: 28px;
+  padding: 0 0.6rem;
   background: #fef3c7;
   color: #92400e;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 0.85rem;
   font-weight: 600;
 }
@@ -476,9 +563,11 @@ onMounted(() => {
 .status-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  height: 28px;
   gap: 0.4rem;
-  padding: 0.4rem 0.8rem;
-  border-radius: 4px;
+  padding: 0 0.6rem;
+  border-radius: 6px;
   font-size: 0.85rem;
   font-weight: 600;
 }
@@ -508,30 +597,90 @@ onMounted(() => {
   background-color: #ef4444;
 }
 
-/* Botão Apagar */
-.delete-btn {
-  background-color: #ef4444;
-  color: white;
-  border: none;
-  padding: 0.5rem 1rem;
+/* Badge de Role para VMs */
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 0.8rem;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.role-badge.manager {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.role-badge.worker {
+  background: #f8fafc;
+  color: #64748b;
+  border-color: #e2e8f0;
+}
+
+/* Ações de Gestão de Réplicas */
+.service-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
   border-radius: 6px;
-  font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
-  white-space: nowrap;
-  flex-shrink: 0;
 }
 
-.delete-btn:hover {
-  background-color: #dc2626;
-  box-shadow: 0 4px 8px rgba(220, 38, 38, 0.25);
+.action-btn.stop {
+  background-color: #fee2e2;
+  color: #ef4444;
+  border-color: #fca5a5;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.action-btn.stop:hover {
+  background-color: #ef4444;
+  color: white;
+  border-color: #dc2626;
   transform: translateY(-1px);
 }
 
-.delete-btn:active {
-  background-color: #b91c1c;
+.action-btn.stop:active {
   transform: translateY(0);
+}
+
+.scale-group {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.action-btn.scale {
+  background-color: #f1f5f9;
+  color: #475569;
+  border-color: #cbd5e1;
+  width: 28px;
+  height: 28px;
+  font-size: 1.1rem;
+}
+
+.action-btn.scale:hover {
+  background-color: #e2e8f0;
+  color: #0f172a;
+  border-color: #94a3b8;
 }
 
 /* Seção de Nós */
