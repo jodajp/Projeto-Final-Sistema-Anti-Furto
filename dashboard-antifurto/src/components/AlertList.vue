@@ -1,42 +1,112 @@
 <template>
-  <div class="list-container">
-    <div class="list-header">
-      <span class="col-type">Tipo de Evento</span>
-      <span class="col-conf">Confiança</span>
-      <span class="col-desc">Descrição</span>
-      <span class="col-time">Hora</span>
-    </div>
-    
-    <div v-if="loading" class="empty-state">A carregar registos...</div>
-    <div v-else-if="alerts.length === 0" class="empty-state">Nenhum evento registado.</div>
+  <div class="history-wrapper">
+    <div v-if="loading" class="global-loading">A sincronizar com a Cloud...</div>
 
-    <div v-else class="list-body">
-      <div v-for="alert in alerts" :key="alert.timestamp" class="list-row">
-        
-        <span class="col-type">
-          <span class="badge" :class="getBadgeClass(alert.tipo)">
-            {{ formatType(alert.tipo) }}
-          </span>
-        </span>
-        
-        <span class="col-conf">{{ (alert.confianca * 100).toFixed(1) }}%</span>
-        
-        <span class="col-desc">{{ alert.descricao }} (Frame: {{ alert.frame_id }})</span>
-        
-        <span class="col-time">{{ formatTime(alert.timestamp_legivel) }}</span>
-        
+    <div class="history-grid" v-else>
+
+      <div class="history-section">
+        <h3 class="section-title">🚨 Últimos 10 Alertas</h3>
+
+        <div class="list-container">
+          <div class="list-header">
+            <span class="col-type">Tipo de Evento</span>
+            <span class="col-conf">Confiança</span>
+            <span class="col-desc">Descrição</span>
+            <span class="col-time">Hora</span>
+          </div>
+
+          <div v-if="alerts.length === 0" class="empty-state">Nenhum evento registado.</div>
+
+          <div v-else class="list-body">
+            <div v-for="alert in alerts" :key="alert.id" class="list-row">
+              <span class="col-type">
+                <span class="badge" :class="getBadgeClass(alert.tipo_alerta)">
+                  {{ formatType(alert.tipo_alerta) }}
+                </span>
+              </span>
+
+              <span class="col-conf">
+                {{ alert.confianca <= 1 ? (alert.confianca * 100).toFixed(1) : alert.confianca.toFixed(1) }}% </span>
+
+                  <span class="col-desc">Track ID: #{{ alert.track_id }}</span>
+                  <span class="col-time">{{ formatTime(alert.timestamp) }}</span>
+            </div>
+          </div>
+        </div>
       </div>
+
+      <div class="history-section">
+        <h3 class="section-title">📊 Últimas 10 Métricas</h3>
+
+        <div class="list-container">
+          <div class="list-header">
+            <span class="col-node">Nó (Câmara)</span>
+            <span class="col-fps">FPS</span>
+            <span class="col-pessoas">Pessoas Detetadas</span>
+          </div>
+
+          <div v-if="metrics.length === 0" class="empty-state">Nenhuma métrica registada.</div>
+
+          <div v-else class="list-body">
+            <div v-for="metrica in metrics" :key="metrica.id" class="list-row">
+              <span class="col-node">
+                <span class="badge badge-node">{{ metrica.node_id }}</span>
+              </span>
+
+              <span class="col-fps">{{ (metrica.fps || 0).toFixed(1) }}</span>
+
+              <span class="col-pessoas">
+                👥 {{ metrica.pessoas_detetadas || 0 }}
+              </span>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>
 
 <script setup>
-const props = defineProps({
-  alerts: { type: Array, default: () => [] },
-  loading: { type: Boolean, default: true }
-})
+import { ref, onMounted, onUnmounted } from 'vue'
 
-const formatType = (type) => type.replace('_', ' ').toUpperCase()
+const alerts = ref([])
+const metrics = ref([])
+const loading = ref(true)
+let fetchInterval = null
+
+const API_BASE = 'http://20.251.152.37:8000/api'
+
+const fetchHistoricoCompleto = async () => {
+  try {
+    const [alertsRes, metricsRes] = await Promise.all([
+      fetch(`${API_BASE}/alertas/recentes`),
+      fetch(`${API_BASE}/metricas/historico?limite=10`)
+    ])
+
+    if (alertsRes.ok) {
+      const aData = await alertsRes.json()
+      alerts.value = aData.alertas || []
+    }
+
+    if (metricsRes.ok) {
+      const mData = await metricsRes.json()
+      metrics.value = mData.historico || []
+    }
+  } catch (error) {
+    console.error("Erro ao sincronizar com a Base de Dados:", error)
+  } finally {
+    loading.value = false
+  }
+}
+
+// Formatação Visual
+const formatType = (type) => {
+  if (!type) return 'DESCONHECIDO'
+  return type.replace('_', ' ').toUpperCase()
+}
+
 const formatTime = (isoString) => {
   if (!isoString) return ''
   const date = new Date(isoString)
@@ -44,149 +114,20 @@ const formatTime = (isoString) => {
 }
 
 const getBadgeClass = (type) => {
-  if (type === 'ocultacao_produto') return 'badge-danger'
-  if (type === 'velocidade') return 'badge-warning'
+  if (!type) return 'badge-info'
+  const t = type.toLowerCase()
+  if (t.includes('furto') || t.includes('ocultacao')) return 'badge-danger'
+  if (t.includes('velocidade') || t.includes('suspeito')) return 'badge-warning'
   return 'badge-info'
 }
+
+onMounted(() => {
+  fetchHistoricoCompleto()
+  fetchInterval = setInterval(fetchHistoricoCompleto, 5000) // Atualiza a cada 5 seg
+})
+
+onUnmounted(() => {
+  if (fetchInterval) clearInterval(fetchInterval)
+})
 </script>
 
-<style scoped>
-.list-container {
-  background: white;
-  border-radius: 6px;
-  border: 1px solid #e2e8f0;
-  overflow: hidden;
-}
-
-.list-header {
-  display: flex;
-  background-color: #f8fafc;
-  padding: 12px 20px;
-  font-weight: 600;
-  color: #475569;
-  border-bottom: 1px solid #e2e8f0;
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.list-body {
-  max-height: 60vh;
-  overflow-y: auto;
-}
-
-.list-row {
-  display: flex;
-  padding: 14px 20px;
-  border-bottom: 1px solid #f1f5f9;
-  align-items: center;
-  transition: background-color 0.15s;
-}
-
-.list-row:hover {
-  background-color: #f8fafc;
-}
-
-.list-row:last-child {
-  border-bottom: none;
-}
-
-.empty-state {
-  padding: 30px;
-  text-align: center;
-  color: #94a3b8;
-  font-style: italic;
-}
-
-/* Grelha de Colunas Alinhadas */
-.col-type { flex: 0 0 180px; }
-.col-conf { flex: 0 0 100px; color: #0f172a; font-weight: 500; font-size: 0.95rem; }
-.col-desc { flex: 1; color: #334155; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 20px; }
-.col-time { flex: 0 0 100px; text-align: right; color: #64748b; font-size: 0.9rem; }
-
-.badge {
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.badge-danger { background-color: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
-.badge-warning { background-color: #fef3c7; color: #d97706; border: 1px solid #fcd34d; }
-.badge-info { background-color: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; }
-
-/* Responsivo para tablets */
-@media (max-width: 1024px) {
-  .list-header {
-    padding: 10px 15px;
-    font-size: 0.8rem;
-  }
-  .list-row {
-    padding: 12px 15px;
-  }
-  .col-type { flex: 0 0 150px; }
-  .col-conf { flex: 0 0 80px; font-size: 0.85rem; }
-  .col-desc { font-size: 0.85rem; }
-  .col-time { flex: 0 0 80px; font-size: 0.8rem; }
-}
-
-/* Responsivo para mobile */
-@media (max-width: 768px) {
-  .list-container {
-    border-radius: 4px;
-  }
-  .list-header {
-    padding: 8px 12px;
-    font-size: 0.7rem;
-  }
-  .list-row {
-    padding: 10px 12px;
-    flex-wrap: wrap;
-  }
-  .list-body {
-    max-height: 50vh;
-  }
-  .col-type { 
-    flex: 0 0 100%; 
-    order: 1;
-  }
-  .col-conf { 
-    flex: 1;
-    order: 2;
-    font-size: 0.8rem;
-  }
-  .col-time { 
-    flex: 0 0 70px;
-    order: 3;
-    font-size: 0.75rem;
-  }
-  .col-desc { 
-    display: none;
-  }
-  .empty-state {
-    padding: 20px;
-    font-size: 0.85rem;
-  }
-}
-
-/* Mobile pequeno */
-@media (max-width: 480px) {
-  .list-header {
-    padding: 6px 10px;
-    font-size: 0.65rem;
-  }
-  .list-row {
-    padding: 8px 10px;
-  }
-  .list-body {
-    max-height: 45vh;
-  }
-  .col-type { font-size: 0.75rem; }
-  .col-conf { font-size: 0.7rem; }
-  .col-time { font-size: 0.65rem; }
-  .badge {
-    padding: 3px 6px;
-    font-size: 0.65rem;
-  }
-}
-</style>

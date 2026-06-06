@@ -1,0 +1,193 @@
+
+.history-wrapper {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.global-loading {
+  text-align: center;
+  padding: 40px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+}
+
+.section-title {
+  margin-bottom: 15px;
+  color: #0f172a;
+  font-size: 1.2rem;
+}
+
+/* O Teu Design de Lista */
+.list-container {
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+}
+
+.list-header {
+  display: flex;
+  background-color: #f8fafc;
+  padding: 12px 20px;
+  font-weight: 600;
+  color: #475569;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.list-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.list-row {
+  display: flex;
+  padding: 14px 20px;
+  border-bottom: 1px solid #f1f5f9;
+  align-items: center;
+  transition: background-color 0.15s;
+}
+
+.list-row:hover {
+  background-color: #f8fafc;
+}
+
+.list-row:last-child {
+  border-bottom: none;
+}
+
+.empty-state {
+  padding: 30px;
+  text-align: center;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* Colunas Alertas */
+.col-type {
+  flex: 0 0 160px;
+}
+
+.col-conf {
+  flex: 0 0 80px;
+  color: #0f172a;
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+
+.col-desc {
+  flex: 1;
+  color: #334155;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 20px;
+}
+
+/* Colunas Métricas */
+.col-node {
+  flex: 0 0 150px;
+}
+
+.col-fps {
+  flex: 0 0 80px;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.col-pessoas {
+  flex: 1;
+  color: #334155;
+  font-weight: 500;
+}
+
+.col-time {
+  flex: 0 0 90px;
+  text-align: right;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+/* Badges */
+.badge {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-danger {
+  background-color: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+}
+
+.badge-warning {
+  background-color: #fef3c7;
+  color: #d97706;
+  border: 1px solid #fcd34d;
+}
+
+.badge-info {
+  background-color: #e0f2fe;
+  color: #0284c7;
+  border: 1px solid #bae6fd;
+}
+
+.badge-node {
+  background-color: #f1f5f9;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+}
+
+/* Responsividade */
+@media (max-width: 1200px) {
+  .history-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .list-header {
+    font-size: 0.7rem;
+    padding: 8px 12px;
+  }
+
+  .list-row {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+  }
+
+  .col-type,
+  .col-node {
+    flex: 0 0 100%;
+    order: 1;
+    margin-bottom: 5px;
+  }
+
+  .col-conf,
+  .col-fps {
+    flex: 1;
+    order: 2;
+    font-size: 0.85rem;
+  }
+
+  .col-time {
+    flex: 0 0 70px;
+    order: 3;
+    font-size: 0.75rem;
+  }
+
+  .col-desc,
+  .col-pessoas {
+    display: none;
+  }
+}

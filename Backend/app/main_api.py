@@ -274,32 +274,6 @@ async def scale_infrastructure_service(service_id: str, req: ScaleRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Falha ao escalar: {str(e)}")
     
-@app.post("/api/infra/services/{service_id}/simular_falha")
-async def simular_falha_servico(service_id: str):
-    """
-    Mata um contentor de forma abrupta para forçar o Swarm 
-    a auto-recuperar e fazer o balanço de carga.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # 1. Listar as tasks (contentores) deste serviço
-            tasks_resp = await client.get(f"http://docker-proxy:2375/tasks?filters=%7B%22service%22%3A%5B%22{service_id}%22%5D%7D")
-            tasks = tasks_resp.json()
-            
-            # 2. Encontrar uma task que esteja a correr
-            task_id = next((t["ID"] for t in tasks if t["Status"]["State"] == "running"), None)
-            
-            if not task_id:
-                raise HTTPException(status_code=404, detail="Nenhuma réplica em execução encontrada.")
-
-            # 3. Forçar o kill do contentor (isto simula o crash que a Prof. quer ver)
-            # Ao fazer isto, o Swarm vai disparar o "Self-Healing" imediatamente
-            await client.post(f"http://docker-proxy:2375/tasks/{task_id}/kill")
-            
-        return {"status": "sucesso", "mensagem": f"Falha simulada no contentor {task_id}. O Swarm está a recuperar."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao simular falha: {str(e)}")
-
 @app.get("/api/infra/nodes")
 async def get_infrastructure_nodes():
     """Lê o estado real dos Nós (VMs) do Docker Swarm."""
