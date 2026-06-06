@@ -12,8 +12,7 @@ services:
     networks:
       - rede_cluster              
     deploy:
-      replicas: 2
-      
+      replicas: 3
       update_config:
         parallelism: 1
         delay: 10s
@@ -28,6 +27,10 @@ services:
       - "8080:80"                
     networks:
       - rede_cluster
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
 
   db_master:
     image: bitnami/postgresql:latest
@@ -44,6 +47,9 @@ services:
       - rede_cluster
     volumes:
       - dados_master:/bitnami/postgresql
+    deploy:
+      restart_policy:
+        condition: on-failure
 
   db_replica:
     image: bitnami/postgresql:latest
@@ -58,6 +64,9 @@ services:
       - rede_cluster
     volumes:
       - dados_replica:/bitnami/postgresql
+    deploy:
+      restart_policy:
+        condition: on-failure
 
   docker-proxy:
       image: tecnativa/docker-socket-proxy

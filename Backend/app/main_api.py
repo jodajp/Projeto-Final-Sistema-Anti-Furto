@@ -240,10 +240,18 @@ class ScaleRequest(BaseModel):
 
 @app.post("/api/infra/services/{service_id}/scale")
 async def scale_infrastructure_service(service_id: str, req: ScaleRequest):
-    """Escala (aumenta/reduz ou pára) as réplicas de um serviço do Docker Swarm."""
+    """Escala réplicas, mas impede que o utilizador coloque a 0."""
+    
+    # BARREIRA DE SEGURANÇA: Impede o valor 0
+    if req.replicas < 1:
+        raise HTTPException(
+            status_code=403, 
+            detail="Segurança: Não é permitido parar o serviço totalmente (replicas < 1). Use 1 como valor mínimo."
+        )
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Obter a especificação atual (Spec) e Versão
+            # 1. Obter especificação atual
             svc_resp = await client.get(f"http://docker-proxy:2375/services/{service_id}")
             svc_resp.raise_for_status()
             svc_data = svc_resp.json()
@@ -251,21 +259,46 @@ async def scale_infrastructure_service(service_id: str, req: ScaleRequest):
             spec = svc_data.get("Spec", {})
             version = svc_data.get("Version", {}).get("Index")
             
-            if "Replicated" not in spec.get("Mode", {}):
-                raise HTTPException(status_code=400, detail="Apenas serviços replicados podem ser escalados.")
-            
-            # Altera o número de réplicas
+            # 2. Atualizar réplicas
             spec["Mode"]["Replicated"]["Replicas"] = req.replicas
             
-            # Enviar de volta ao Swarm
+            # 3. Enviar update
             update_resp = await client.post(
                 f"http://docker-proxy:2375/services/{service_id}/update?version={version}",
                 json=spec
             )
             update_resp.raise_for_status()
-        return {"status": "sucesso", "mensagem": f"Serviço {service_id} atualizado para {req.replicas} réplicas."}
+            
+        return {"status": "sucesso", "mensagem": f"Serviço {service_id} escalado para {req.replicas} réplicas."}
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Falha ao alterar réplicas: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Falha ao escalar: {str(e)}")
+    
+@app.post("/api/infra/services/{service_id}/simular_falha")
+async def simular_falha_servico(service_id: str):
+    """
+    Mata um contentor de forma abrupta para forçar o Swarm 
+    a auto-recuperar e fazer o balanço de carga.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # 1. Listar as tasks (contentores) deste serviço
+            tasks_resp = await client.get(f"http://docker-proxy:2375/tasks?filters=%7B%22service%22%3A%5B%22{service_id}%22%5D%7D")
+            tasks = tasks_resp.json()
+            
+            # 2. Encontrar uma task que esteja a correr
+            task_id = next((t["ID"] for t in tasks if t["Status"]["State"] == "running"), None)
+            
+            if not task_id:
+                raise HTTPException(status_code=404, detail="Nenhuma réplica em execução encontrada.")
+
+            # 3. Forçar o kill do contentor (isto simula o crash que a Prof. quer ver)
+            # Ao fazer isto, o Swarm vai disparar o "Self-Healing" imediatamente
+            await client.post(f"http://docker-proxy:2375/tasks/{task_id}/kill")
+            
+        return {"status": "sucesso", "mensagem": f"Falha simulada no contentor {task_id}. O Swarm está a recuperar."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao simular falha: {str(e)}")
 
 @app.get("/api/infra/nodes")
 async def get_infrastructure_nodes():
