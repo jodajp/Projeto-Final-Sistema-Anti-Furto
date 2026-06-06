@@ -58,11 +58,13 @@ class Phase4Inference:
         self.threshold = float(threshold)
         self.temperature = max(float(temperature), 1e-3)
         
+        self.feature_extractor = KinematicFeatureExtractor()
+        
         # Load config (same as training)
-        # input_size = 34 (velocities: 17*2) + 16 (limb orientations: 8*2) = 50
+        # input_size dynamically derived
         self.config = Phase4Config(
             sequence_length=30,
-            input_size=50,  # 34 velocities + 16 limb orientations
+            input_size=self.feature_extractor.feature_dim(),
             hidden_size=128,
             num_layers=1,
             attention_size=64,
@@ -75,21 +77,32 @@ class Phase4Inference:
             device=device,
         )
         
-        # Create model
-        self.model = Phase4Classifier(self.config).to(device)
-        self.model.eval()
+        # Check model file extension and existences
+        # Auto-convert pth path to onnx path if onnx exists
+        onnx_candidate = checkpoint_path.replace(".pth", ".onnx")
+        self.use_onnx = checkpoint_path.endswith(".onnx") or os.path.exists(onnx_candidate)
         
-        # Load checkpoint
-        if os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-            # Handle both state_dict and full checkpoint
-            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-                self.model.load_state_dict(checkpoint["model_state_dict"])
-            else:
-                self.model.load_state_dict(checkpoint)
-            print(f"[INFERENCE] Loaded checkpoint: {checkpoint_path}")
+        if self.use_onnx:
+            actual_path = onnx_candidate if not checkpoint_path.endswith(".onnx") else checkpoint_path
+            import onnxruntime as ort
+            self.ort_session = ort.InferenceSession(str(actual_path), providers=['CPUExecutionProvider'])
+            print(f"[INFERENCE] Loaded ONNX model from {actual_path} successfully.")
         else:
-            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+            # Create model
+            self.model = Phase4Classifier(self.config).to(device)
+            self.model.eval()
+            
+            # Load checkpoint
+            if os.path.exists(checkpoint_path):
+                checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+                # Handle both state_dict and full checkpoint
+                if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                    self.model.load_state_dict(checkpoint["model_state_dict"])
+                else:
+                    self.model.load_state_dict(checkpoint)
+                print(f"[INFERENCE] Loaded PyTorch checkpoint: {checkpoint_path}")
+            else:
+                raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
         
         # Initialize components using config
         config_path = EDGE_DIR / "config.yaml"
@@ -113,7 +126,11 @@ class Phase4Inference:
             torso_confidence_threshold=0.5,
             allow_invalid_torso=True
         ))
-        self.feature_extractor = KinematicFeatureExtractor()
+        
+        # Startup contract assertion
+        assert self.feature_extractor.feature_dim() == self.config.input_size, \
+            f"Feature dimension mismatch! Extractor: {self.feature_extractor.feature_dim()}, Model Config: {self.config.input_size}"
+        
         self.visualizer = SkeletonVisualizer(canvas_size=500, show_labels=False, show_confidence=False)
         
         # Inference state
@@ -178,6 +195,9 @@ class Phase4Inference:
     
     def predict(self, frame: InferenceFrame) -> tuple:
         """Predict shoplifting probability from sequence buffer."""
+        import time
+        t_start = time.perf_counter()
+        
         if len(self.frame_buffer) < self.config.sequence_length:
             # Not enough frames yet
             return None, None, None, None
@@ -192,15 +212,25 @@ class Phase4Inference:
         # Extract features: (1, T, 66)
         features_batch = self.feature_extractor.transform(coords_batch)
         
-        # Prepare tensor for model
-        features_tensor = torch.from_numpy(features_batch).float().to(self.device)  # (1, T, 66)
-        
-        with torch.no_grad():
-            logits, attn_weights = self.model(features_tensor)
-        
-        logit = logits.item()
-        prob = 1.0 / (1.0 + np.exp(-logit / self.temperature))  # calibrated sigmoid
-        attn = attn_weights[0].cpu().numpy()  # (T,)
+        if self.use_onnx:
+            ort_inputs = {self.ort_session.get_inputs()[0].name: features_batch.astype(np.float32)}
+            ort_outs = self.ort_session.run(None, ort_inputs)
+            logit = float(ort_outs[0][0])
+            prob = 1.0 / (1.0 + np.exp(-logit / self.temperature))  # calibrated sigmoid
+            attn = ort_outs[1][0] if len(ort_outs) > 1 else np.ones(self.config.sequence_length) / self.config.sequence_length
+        else:
+            # Prepare tensor for model
+            features_tensor = torch.from_numpy(features_batch).float().to(self.device)  # (1, T, 66)
+            
+            with torch.no_grad():
+                logits, attn_weights = self.model(features_tensor)
+            
+            logit = logits.item()
+            prob = 1.0 / (1.0 + np.exp(-logit / self.temperature))  # calibrated sigmoid
+            attn = attn_weights[0].cpu().numpy()  # (T,)
+
+        t_end = time.perf_counter()
+        latency_ms = (t_end - t_start) * 1000.0
 
         feature_seq = features_batch[0]
         feature_stats = {
@@ -208,6 +238,7 @@ class Phase4Inference:
             "feature_std": float(np.std(feature_seq)),
             "feature_delta_mean": float(np.mean(np.abs(np.diff(feature_seq, axis=0)))) if feature_seq.shape[0] > 1 else 0.0,
             "attention_entropy": float(-np.sum(attn * np.log(np.clip(attn, 1e-8, 1.0))) / np.log(len(attn))) if len(attn) > 1 else 0.0,
+            "latency_ms": latency_ms,
         }
 
         return logit, prob, attn, feature_stats
@@ -291,7 +322,16 @@ class Phase4Inference:
             cv2.putText(overlay, f"Decision: {decision} @ thr={self.threshold:.2f}", (x, y), font, font_scale, decision_color, thickness)
             y += line_height
 
+            # Model engine and latency details
+            engine_text = "Engine: ONNX Runtime" if self.use_onnx else "Engine: PyTorch"
+            engine_color = (0, 255, 255) if self.use_onnx else (255, 100, 255)
+            cv2.putText(overlay, engine_text, (x, y), font, font_scale, engine_color, thickness)
+            y += line_height
+
             if feature_stats:
+                if "latency_ms" in feature_stats:
+                    cv2.putText(overlay, f"Inference Latency: {feature_stats['latency_ms']:.2f} ms", (x, y), font, font_scale, (100, 255, 100), thickness)
+                    y += line_height
                 cv2.putText(overlay, f"Feat |mean|: {feature_stats['feature_abs_mean']:.3f}", (x, y), font, font_scale, (220, 220, 220), thickness)
                 y += line_height
                 cv2.putText(overlay, f"Feat std: {feature_stats['feature_std']:.3f}", (x, y), font, font_scale, (220, 220, 220), thickness)
@@ -447,22 +487,33 @@ def main():
 
     threshold = float(args.threshold)
     temperature = 1.0
-    if args.threshold_file:
-        threshold_path = Path(args.threshold_file)
-        if threshold_path.exists():
-            try:
-                report = json.loads(threshold_path.read_text(encoding="utf-8"))
-                threshold = float(report.get("threshold", threshold))
-                temperature = float(report.get("temperature", temperature))
-            except Exception as exc:
-                print(f"[WARNING] Could not load threshold file {threshold_path}: {exc}")
-    
+
     # Get checkpoint path
     checkpoint_path = args.checkpoint
     if not os.path.isabs(checkpoint_path):
         checkpoint_path = EDGE_DIR / checkpoint_path
+        
+    # Try to load calibrated threshold dynamically from report
+    report_candidates = [
+        Path(args.threshold_file) if args.threshold_file else None,
+        checkpoint_path.parent / "phase4_experiment_report.json",
+        checkpoint_path.with_name(checkpoint_path.stem + "_report.json"),
+        checkpoint_path.with_suffix(".json")
+    ]
+    for r_path in report_candidates:
+        if r_path and r_path.exists():
+            try:
+                report = json.loads(r_path.read_text(encoding="utf-8"))
+                threshold = float(report.get("threshold", threshold))
+                temperature = float(report.get("temperature", temperature))
+                print(f"[INFERENCE] Loaded calibrated threshold {threshold:.3f} and temperature {temperature:.2f} from {r_path.name}")
+                break
+            except Exception as exc:
+                pass
     
-    if not os.path.exists(checkpoint_path):
+    # Check if checkpoint path exists or its onnx candidate exists
+    onnx_candidate = str(checkpoint_path).replace(".pth", ".onnx")
+    if not os.path.exists(checkpoint_path) and not os.path.exists(onnx_candidate):
         print(f"[ERROR] Checkpoint not found: {checkpoint_path}")
         return
     

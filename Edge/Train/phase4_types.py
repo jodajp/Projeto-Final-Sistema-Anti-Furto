@@ -15,4 +15,7 @@ class Phase4Config:
     epochs: int = 30
     weight_decay: float = 0.0
     confidence_weighted_loss: bool = True
+    loss_type: str = "focal"  # "bce" or "focal"
+    focal_alpha: float = 0.25
+    focal_gamma: float = 2.0
     device: Optional[str] = None

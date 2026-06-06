@@ -29,8 +29,8 @@ activities:
   - enabled: false
     plugin: Atividades_Suspeitas.shoplifting_detector:ShopliftingActivityDetector
     params:
-      model_path: ./models/activity_classifier.pth
-      seq_length: 45
+      model_path: ./models/phase4_experiment_model.onnx
+      seq_length: 30
       threshold: 0.50
       cooldown_frames: 45
   - enabled: false

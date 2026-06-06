@@ -35,59 +35,91 @@ class SplitBundle:
     test_idx: np.ndarray
 
 
-def stratified_split_three(
+def grouped_stratified_split(
+    clip_ids: List[str],
     labels: np.ndarray,
     val_ratio: float,
     test_ratio: float,
     seed: int = 42,
 ) -> SplitBundle:
+    """
+    Split samples grouped by clip_id so that all windows of any single clip
+    land in exactly one split, while preserving stratified label balance of clips.
+    """
     rng = np.random.default_rng(seed)
-    labels = np.asarray(labels, dtype=np.int32)
-
-    train_indices: List[int] = []
-    val_indices: List[int] = []
-    test_indices: List[int] = []
-
-    for cls in np.unique(labels):
-        cls_indices = np.where(labels == cls)[0]
-        rng.shuffle(cls_indices)
-        total = len(cls_indices)
+    
+    # Group sample indices by clip_id
+    clip_to_indices = {}
+    for idx, cid in enumerate(clip_ids):
+        clip_to_indices.setdefault(cid, []).append(idx)
+        
+    # Determine label for each clip (suspicious if any window is suspicious)
+    clip_labels = {}
+    for cid, idxs in clip_to_indices.items():
+        clip_labels[cid] = int(np.max(labels[idxs]))
+        
+    # Stratify split unique clip_ids
+    unique_clips = list(clip_to_indices.keys())
+    unique_labels = np.array([clip_labels[cid] for cid in unique_clips])
+    
+    train_clips: List[str] = []
+    val_clips: List[str] = []
+    test_clips: List[str] = []
+    
+    for cls in np.unique(unique_labels):
+        cls_clips = [cid for cid in unique_clips if clip_labels[cid] == cls]
+        rng.shuffle(cls_clips)
+        
+        total = len(cls_clips)
         if total == 0:
             continue
-
+            
         test_count = int(round(total * test_ratio)) if test_ratio > 0 else 0
         if test_ratio > 0 and total > 1:
             test_count = max(1, test_count)
         test_count = min(test_count, max(0, total - 2)) if total > 2 else min(test_count, max(0, total - 1))
-
+        
         remaining = total - test_count
         val_count = int(round(total * val_ratio)) if val_ratio > 0 else 0
         if val_ratio > 0 and remaining > 1:
             val_count = max(1, val_count)
         val_count = min(val_count, max(0, remaining - 1)) if remaining > 1 else min(val_count, max(0, remaining))
-
-        test_part = cls_indices[:test_count]
-        val_part = cls_indices[test_count:test_count + val_count]
-        train_part = cls_indices[test_count + val_count:]
-
-        if len(train_part) == 0 and len(cls_indices) > 0:
-            train_part = cls_indices[-1:]
+        
+        test_part = cls_clips[:test_count]
+        val_part = cls_clips[test_count:test_count + val_count]
+        train_part = cls_clips[test_count + val_count:]
+        
+        if len(train_part) == 0 and len(cls_clips) > 0:
+            train_part = cls_clips[-1:]
             if len(test_part) > 0:
                 test_part = test_part[:-1]
             elif len(val_part) > 0:
                 val_part = val_part[:-1]
-
-        train_indices.extend(train_part.tolist())
-        val_indices.extend(val_part.tolist())
-        test_indices.extend(test_part.tolist())
-
-    rng.shuffle(train_indices)
-    rng.shuffle(val_indices)
-    rng.shuffle(test_indices)
+                
+        train_clips.extend(train_part)
+        val_clips.extend(val_part)
+        test_clips.extend(test_part)
+        
+    # Map back unique clips to sample indices
+    train_idx = []
+    for cid in train_clips:
+        train_idx.extend(clip_to_indices[cid])
+    val_idx = []
+    for cid in val_clips:
+        val_idx.extend(clip_to_indices[cid])
+    test_idx = []
+    for cid in test_clips:
+        test_idx.extend(clip_to_indices[cid])
+        
+    # Shuffle indices within splits
+    rng.shuffle(train_idx)
+    rng.shuffle(val_idx)
+    rng.shuffle(test_idx)
+    
     return SplitBundle(
-        train_idx=np.asarray(train_indices, dtype=np.int64),
-        val_idx=np.asarray(val_indices, dtype=np.int64),
-        test_idx=np.asarray(test_indices, dtype=np.int64),
+        train_idx=np.asarray(train_idx, dtype=np.int64),
+        val_idx=np.asarray(val_idx, dtype=np.int64),
+        test_idx=np.asarray(test_idx, dtype=np.int64),
     )
 
 
@@ -101,7 +133,8 @@ def build_loaders(
 ):
     base_dataset = Phase4PoseDataset(samples, augment=False)
     labels = base_dataset.labels.astype(np.int32)
-    split = stratified_split_three(labels, val_ratio=val_ratio, test_ratio=test_ratio, seed=seed)
+    clip_ids = base_dataset.clip_ids
+    split = grouped_stratified_split(clip_ids, labels, val_ratio=val_ratio, test_ratio=test_ratio, seed=seed)
 
     if len(split.val_idx) == 0:
         split.val_idx = split.train_idx[: max(1, len(split.train_idx) // 5)]
@@ -160,14 +193,14 @@ def collect_predictions(model: torch.nn.Module, dataloader: DataLoader, device: 
     return {"probabilities": probabilities, "labels": labels, "sources": sources}
 
 
-def best_threshold(probabilities: Sequence[float], labels: Sequence[int]) -> Tuple[float, Dict[str, float]]:
+def best_threshold(probabilities: Sequence[float], labels: Sequence[int], metric: str = "hprs") -> Tuple[float, Dict[str, float]]:
     probs = np.asarray(probabilities, dtype=np.float32)
     y_true = np.asarray(labels, dtype=np.int32)
     if len(probs) == 0:
-        return 0.5, {"f1": 0.0, "accuracy": 0.0, "precision": 0.0, "recall": 0.0}
+        return 0.5, {"f1": 0.0, "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "specificity": 0.0, "hprs": 0.0}
 
     best_t = 0.5
-    best_f1 = -1.0
+    best_score = -1.0
     best_metrics: Dict[str, float] = {}
 
     for threshold in np.linspace(0.05, 0.95, 181):
@@ -179,16 +212,27 @@ def best_threshold(probabilities: Sequence[float], labels: Sequence[int]) -> Tup
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
         accuracy = (tp + tn) / max(1, len(y_true))
+        
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        
+        # HPRS score: harmonic mean of precision, recall, and specificity
+        if precision > 0 and recall > 0 and specificity > 0:
+            hprs = 3 / (1.0 / precision + 1.0 / recall + 1.0 / specificity)
+        else:
+            hprs = 0.0
 
-        if f1 > best_f1:
-            best_f1 = f1
+        score = hprs if metric == "hprs" else f1
+        if score > best_score:
+            best_score = score
             best_t = float(threshold)
             best_metrics = {
                 "precision": float(precision),
                 "recall": float(recall),
+                "specificity": float(specificity),
                 "f1": float(f1),
+                "hprs": float(hprs),
                 "accuracy": float(accuracy),
                 "tp": float(tp),
                 "tn": float(tn),
@@ -211,17 +255,23 @@ def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], thr
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
-    accuracy = (tp + tn) / max(1, len(y_true))
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    accuracy = (tp + tn) / max(1, len(y_true))
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+    
+    if precision > 0 and recall > 0 and specificity > 0:
+        hprs = 3 / (1.0 / precision + 1.0 / recall + 1.0 / specificity)
+    else:
+        hprs = 0.0
 
     return {
         "threshold": float(threshold),
         "precision": float(precision),
         "recall": float(recall),
-        "f1": float(f1),
-        "accuracy": float(accuracy),
         "specificity": float(specificity),
+        "f1": float(f1),
+        "hprs": float(hprs),
+        "accuracy": float(accuracy),
         "tp": float(tp),
         "tn": float(tn),
         "fp": float(fp),
@@ -255,6 +305,10 @@ def main() -> None:
     parser.add_argument("--augment", action="store_true", help="Enable light geometric augmentation on the train split")
     parser.add_argument("--save-path", type=str, default=str(ROOT_DIR / "Edge" / "models" / "phase4_experiment_model.pth"))
     parser.add_argument("--report-path", type=str, default=str(ROOT_DIR / "Edge" / "models" / "phase4_experiment_report.json"))
+    parser.add_argument("--metric", type=str, choices=["f1", "hprs"], default="hprs", help="Metric to optimize the decision threshold")
+    parser.add_argument("--loss", type=str, choices=["bce", "focal"], default="focal", help="Loss function type")
+    parser.add_argument("--focal-alpha", type=float, default=0.25, help="Focal Loss alpha parameter")
+    parser.add_argument("--focal-gamma", type=float, default=2.0, help="Focal Loss gamma parameter")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -290,6 +344,32 @@ def main() -> None:
 
     print(f"Split sizes -> train={len(split.train_idx)} | val={len(split.val_idx)} | test={len(split.test_idx)}")
 
+    # Print split leakage check and statistics
+    all_clip_ids = [samples[idx].clip_id for idx in range(len(samples))]
+    all_labels = [samples[idx].label for idx in range(len(samples))]
+    
+    def print_split_stats(name, indices):
+        split_clips = set(all_clip_ids[idx] for idx in indices)
+        split_labels = [all_labels[idx] for idx in indices]
+        n_normal = sum(1 for l in split_labels if l == 0)
+        n_suspicious = sum(1 for l in split_labels if l == 1)
+        print(f"  {name:5s} split -> {len(split_clips):3d} unique clips | {len(indices):4d} windows (normal={n_normal}, suspicious={n_suspicious})")
+        return split_clips
+
+    print("[INFO] Split statistics and leakage check:")
+    train_clips = print_split_stats("Train", split.train_idx)
+    val_clips = print_split_stats("Val", split.val_idx)
+    test_clips = print_split_stats("Test", split.test_idx)
+    
+    overlap_train_val = train_clips.intersection(val_clips)
+    overlap_train_test = train_clips.intersection(test_clips)
+    overlap_val_test = val_clips.intersection(test_clips)
+    print(f"  Overlap Train-Val: {len(overlap_train_val)} | Train-Test: {len(overlap_train_test)} | Val-Test: {len(overlap_val_test)}")
+    assert len(overlap_train_val) == 0, "Data leakage detected: clip overlap between Train and Val!"
+    assert len(overlap_train_test) == 0, "Data leakage detected: clip overlap between Train and Test!"
+    assert len(overlap_val_test) == 0, "Data leakage detected: clip overlap between Val and Test!"
+    print("  [SUCCESS] Split verification passed! Zero clip leakage.")
+
     extractor = KinematicFeatureExtractor()
     config = Phase4Config(
         sequence_length=args.sequence_length,
@@ -300,6 +380,9 @@ def main() -> None:
         batch_size=args.batch_size,
         epochs=args.epochs,
         weight_decay=args.weight_decay,
+        loss_type=args.loss,
+        focal_alpha=args.focal_alpha,
+        focal_gamma=args.focal_gamma,
     )
 
     model = Phase4Classifier(config)
@@ -309,14 +392,23 @@ def main() -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     best_val = float("inf")
+    patience = 5
+    epochs_no_improve = 0
     print("[2/5] Training...")
     for epoch in range(1, config.epochs + 1):
         train_loss = trainer.train_epoch(train_loader)
         val_loss = trainer.evaluate(val_loader)
         print(f"Epoch {epoch:02d}/{config.epochs} | train={train_loss:.4f} | val={val_loss:.4f}")
-        if val_loss <= best_val:
+        
+        if val_loss < best_val - 1e-4:
             best_val = val_loss
             trainer.save(str(save_path))
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"[EARLY STOPPING] Triggered early stopping at epoch {epoch:02d} (best val loss: {best_val:.4f})")
+                break
 
     print("[3/5] Loading best checkpoint...")
     best_model = Phase4Classifier(config)
@@ -325,18 +417,18 @@ def main() -> None:
 
     device = torch.device("cpu")
     val_pred = collect_predictions(best_model.to(device), val_loader, device)
-    threshold, threshold_metrics = best_threshold(val_pred["probabilities"], val_pred["labels"])
+    threshold, threshold_metrics = best_threshold(val_pred["probabilities"], val_pred["labels"], metric=args.metric)
     test_pred = collect_predictions(best_model.to(device), test_loader, device)
     test_metrics = confusion_metrics(test_pred["probabilities"], test_pred["labels"], threshold)
 
     print("[4/5] Calibration and test metrics...")
-    print(f"Validation threshold: {threshold:.3f}")
+    print(f"Validation threshold (optimized for {args.metric.upper()}): {threshold:.3f}")
     print(
-        f"Validation best -> f1={threshold_metrics['f1']:.3f} | precision={threshold_metrics['precision']:.3f} | "
-        f"recall={threshold_metrics['recall']:.3f} | accuracy={threshold_metrics['accuracy']:.3f}"
+        f"Validation best -> f1={threshold_metrics['f1']:.3f} | hprs={threshold_metrics['hprs']:.3f} | precision={threshold_metrics['precision']:.3f} | "
+        f"recall={threshold_metrics['recall']:.3f} | specificity={threshold_metrics['specificity']:.3f} | accuracy={threshold_metrics['accuracy']:.3f}"
     )
     print(
-        f"Test -> f1={test_metrics['f1']:.3f} | precision={test_metrics['precision']:.3f} | "
+        f"Test -> f1={test_metrics['f1']:.3f} | hprs={test_metrics['hprs']:.3f} | precision={test_metrics['precision']:.3f} | "
         f"recall={test_metrics['recall']:.3f} | accuracy={test_metrics['accuracy']:.3f} | specificity={test_metrics['specificity']:.3f}"
     )
     print(
@@ -361,6 +453,10 @@ def main() -> None:
             "test_ratio": args.test_ratio,
             "augment": bool(args.augment),
             "seed": args.seed,
+            "metric": args.metric,
+            "loss": args.loss,
+            "focal_alpha": args.focal_alpha,
+            "focal_gamma": args.focal_gamma,
         },
         "sample_counts": {"normal": normal, "suspicious": suspicious, "total": len(samples)},
         "split_sizes": {"train": int(len(split.train_idx)), "val": int(len(split.val_idx)), "test": int(len(split.test_idx))},
@@ -368,6 +464,7 @@ def main() -> None:
         "validation": threshold_metrics,
         "test": test_metrics,
         "save_path": str(save_path),
+        "onnx_path": str(save_path).replace(".pth", ".onnx"),
     }
 
     report_path = Path(args.report_path)
@@ -376,6 +473,32 @@ def main() -> None:
 
     print("[5/5] Done.")
     print(f"Saved checkpoint: {save_path}")
+
+    # Convert best model to ONNX
+    onnx_path = str(save_path).replace(".pth", ".onnx")
+    print(f"Exporting model to ONNX: {onnx_path} ...")
+    try:
+        best_model.eval()
+        dummy_input = torch.zeros(1, config.sequence_length, config.input_size, dtype=torch.float32)
+        torch.onnx.export(
+            best_model.to("cpu"),
+            dummy_input,
+            onnx_path,
+            export_params=True,
+            opset_version=14,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=['logits', 'attention'],
+            dynamic_axes={
+                'input': {0: 'batch_size'},
+                'logits': {0: 'batch_size'},
+                'attention': {0: 'batch_size'}
+            }
+        )
+        print(f"[SUCCESS] Exported ONNX model successfully: {onnx_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to export model to ONNX: {e}")
+
     print(f"Saved report: {report_path}")
     print(f"Calibrated threshold: {threshold:.3f}")
 

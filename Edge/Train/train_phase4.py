@@ -6,7 +6,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from .phase4_types import Phase4Config
-from .losses import ConfidenceWeightedBCELoss
+from .losses import ConfidenceWeightedBCELoss, ConfidenceWeightedFocalLoss
 
 
 class Trainer:
@@ -19,7 +19,13 @@ class Trainer:
         self.optim = torch.optim.Adam(
             self.model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
         )
-        self.loss_fn = ConfidenceWeightedBCELoss()
+        if config.loss_type == "focal":
+            self.loss_fn = ConfidenceWeightedFocalLoss(
+                alpha=config.focal_alpha,
+                gamma=config.focal_gamma
+            )
+        else:
+            self.loss_fn = ConfidenceWeightedBCELoss()
 
     def train_epoch(self, dataloader: DataLoader) -> float:
         self.model.train()
@@ -41,6 +47,7 @@ class Trainer:
 
             self.optim.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optim.step()
 
             total_loss += float(loss.detach().cpu().item())

@@ -1,0 +1,60 @@
+{
+  "config": {
+    "sequence_length": 30,
+    "manual_count": 10,
+    "retail_normal_count": 150,
+    "retail_suspicious_count": 150,
+    "batch_size": 8,
+    "epochs": 20,
+    "hidden_size": 128,
+    "attention_size": 64,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0,
+    "val_ratio": 0.2,
+    "test_ratio": 0.2,
+    "augment": false,
+    "seed": 42,
+    "metric": "hprs",
+    "loss": "focal",
+    "focal_alpha": 0.25,
+    "focal_gamma": 2.0
+  },
+  "sample_counts": {
+    "normal": 485,
+    "suspicious": 310,
+    "total": 795
+  },
+  "split_sizes": {
+    "train": 479,
+    "val": 159,
+    "test": 157
+  },
+  "threshold": 0.43999999999999995,
+  "validation": {
+    "precision": 0.5666666666666667,
+    "recall": 0.53125,
+    "specificity": 0.7263157894736842,
+    "f1": 0.5483870967741935,
+    "hprs": 0.5971491600203632,
+    "accuracy": 0.6477987421383647,
+    "tp": 34.0,
+    "tn": 69.0,
+    "fp": 26.0,
+    "fn": 30.0
+  },
+  "test": {
+    "threshold": 0.43999999999999995,
+    "precision": 0.5416666666666666,
+    "recall": 0.45614035087719296,
+    "specificity": 0.78,
+    "f1": 0.4952380952380952,
+    "hprs": 0.563855421686747,
+    "accuracy": 0.6624203821656051,
+    "tp": 26.0,
+    "tn": 78.0,
+    "fp": 22.0,
+    "fn": 31.0
+  },
+  "save_path": "F:\\Github\\Projeto-Final-Sistema-Anti-Furto\\Edge\\models\\phase4_experiment_model.pth",
+  "onnx_path": "F:\\Github\\Projeto-Final-Sistema-Anti-Furto\\Edge\\models\\phase4_experiment_model.onnx"
+}

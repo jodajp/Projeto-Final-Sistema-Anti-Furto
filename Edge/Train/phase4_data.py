@@ -37,6 +37,7 @@ class Phase4Sample:
     scores: np.ndarray  # (T, 17)
     label: int
     source: str = ""
+    clip_id: str = ""
 
 
 def _ensure_shape_17x2(coords: np.ndarray) -> np.ndarray:
@@ -180,7 +181,7 @@ def _load_manual_samples(manifest_path: Path, pkl_path: Path, sequence_length: i
             if window_coords.shape != (sequence_length, 17, 2) or window_scores.shape != (sequence_length, 17):
                 continue
             source_name = npz_path.stem
-            samples.append(Phase4Sample(coords=window_coords, scores=window_scores, label=label, source=source_name))
+            samples.append(Phase4Sample(coords=window_coords, scores=window_scores, label=label, source=source_name, clip_id=source_name))
 
     return samples
 
@@ -293,21 +294,27 @@ def _load_retail_samples(manifest_name: str, sequence_length: int, label_limit: 
 
 def build_phase4_samples(config: Phase4DataConfig) -> List[Phase4Sample]:
     samples: List[Phase4Sample] = []
-    samples.extend(_load_manual_samples(config.manual_manifest_path, config.manual_pkl_path, config.sequence_length, config.manual_limit))
+    
+    # Load manual clips
+    if config.manual_limit > 0:
+        samples.extend(_load_manual_samples(
+            config.manual_manifest_path,
+            config.manual_pkl_path,
+            config.sequence_length,
+            config.manual_limit
+        ))
 
-    remaining_normal = max(0, config.retail_normal_limit)
-    remaining_suspicious = max(0, config.retail_suspicious_limit)
-
-    for manifest_name in config.retail_manifests:
-        lower = manifest_name.lower()
-        if "normal" in lower and remaining_normal > 0:
-            retail_samples = _load_retail_samples(manifest_name, config.sequence_length, remaining_normal)
-            samples.extend([sample for sample in retail_samples if sample.label == 0])
-            remaining_normal = max(0, remaining_normal - len([sample for sample in retail_samples if sample.label == 0]))
-        elif "suspicious" in lower and remaining_suspicious > 0:
-            retail_samples = _load_retail_samples(manifest_name, config.sequence_length, remaining_suspicious)
-            samples.extend([sample for sample in retail_samples if sample.label == 1])
-            remaining_suspicious = max(0, remaining_suspicious - len([sample for sample in retail_samples if sample.label == 1]))
+    # Load RetailS clips using mask-aware disk loader
+    staged_limit = config.retail_suspicious_limit // 2 if config.retail_suspicious_limit else None
+    realworld_limit = config.retail_suspicious_limit - staged_limit if config.retail_suspicious_limit and staged_limit is not None else None
+    
+    retail_samples = load_retails_disk_samples(
+        sequence_length=config.sequence_length,
+        normal_file_limit=config.retail_normal_limit,
+        staged_file_limit=staged_limit,
+        realworld_file_limit=realworld_limit,
+    )
+    samples.extend(retail_samples)
 
     return samples
 
@@ -336,6 +343,7 @@ class Phase4PoseDataset(Dataset):
         self.feats = feats.astype(np.float32)
         self.labels = labels
         self.sources = [sample.source for sample in samples]
+        self.clip_ids = [sample.clip_id for sample in samples]
         self.augment = bool(augment)
         self.augmentation_noise = float(augmentation_noise)
         self.augmentation_scale = float(augmentation_scale)
@@ -370,6 +378,7 @@ class Phase4PoseDataset(Dataset):
             "confidences": torch.from_numpy(scores),
             "labels": torch.tensor(self.labels[idx], dtype=torch.float32),
             "source": self.sources[idx],
+            "clip_id": self.clip_ids[idx],
         }
 
 
@@ -478,6 +487,7 @@ def _build_windows_from_clip(
     for idx, (window_coords, window_scores) in enumerate(windows):
         if window_coords.shape != (sequence_length, 17, 2) or window_scores.shape != (sequence_length, 17):
             continue
+        window_coords, window_scores = _normalize_sequence(window_coords, window_scores)
         window_label = int(label)
         if mask is not None and len(mask) > 0:
             start_idx = start_positions[idx] if idx < len(start_positions) else 0
@@ -490,6 +500,7 @@ def _build_windows_from_clip(
                 scores=window_scores,
                 label=window_label,
                 source=f"{source}:{idx}",
+                clip_id=source,
             )
         )
 

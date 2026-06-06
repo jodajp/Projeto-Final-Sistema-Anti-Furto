@@ -11,132 +11,170 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from .base_activity import BaseActivity, SuspiciousEvent
-
-class ActionClassifier(torch.nn.Module):
-    def __init__(self, seq_len=30, input_dim=34, hidden_dim=64):
-        super().__init__()
-        self.flatten = torch.nn.Flatten()
-        self.net = torch.nn.Sequential(
-            torch.nn.Linear(seq_len * input_dim, hidden_dim * 2),
-            torch.nn.ReLU(),
-            # No dropout needed for inference/evaluation mode, but keeping same architecture to load state_dict
-            torch.nn.Dropout(0.3),
-            torch.nn.Linear(hidden_dim * 2, hidden_dim),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.3),
-            torch.nn.Linear(hidden_dim, 2)
-        )
-        
-    def forward(self, x):
-        x = self.flatten(x)
-        return self.net(x)
+from Train.phase4_model import Phase4Classifier
+from Train.phase4_types import Phase4Config
+from pipeline.kinematic_features import KinematicFeatureExtractor
+from pipeline.spatial_normalizer import SpatialNormalizer, NormalizationParams
 
 
 class ShopliftingActivityDetector(BaseActivity):
     """
-    ML-based activity detector.
-    Uses the trained PyTorch model to run inference on a rolling temporal window
-    of keypoints to classify "normal" vs "shoplifting".
+    LSTM-based activity detector.
+    Uses the trained PyTorch Phase 4 LSTM model to run inference on a rolling 
+    temporal window of keypoints to classify "normal" vs "shoplifting".
     """
-    def __init__(self, model_path: str, seq_length: int = 45, threshold: float = 0.65, cooldown_frames: int = 45,
-                 smoothing_window: int = 5, consecutive_required: int = 3):
+    def __init__(
+        self, 
+        model_path: str, 
+        seq_length: int = 30, 
+        threshold: float = 0.50, 
+        cooldown_frames: int = 45,
+        smoothing_window: int = 5, 
+        consecutive_required: int = 3
+    ):
+        model_file = Path(model_path).expanduser().resolve()
+        
+        # Try to load calibrated threshold dynamically from report json if present
+        calibrated_threshold = None
+        report_candidates = [
+            model_file.parent / "phase4_experiment_report.json",
+            model_file.with_name(model_file.stem + "_report.json"),
+            model_file.with_suffix(".json")
+        ]
+        import json
+        for r_path in report_candidates:
+            if r_path.exists():
+                try:
+                    with open(r_path, 'r', encoding='utf-8') as f:
+                        report_data = json.load(f)
+                    if "threshold" in report_data:
+                        calibrated_threshold = float(report_data["threshold"])
+                        print(f"[ShopliftingActivityDetector] Loaded calibrated threshold {calibrated_threshold:.3f} from {r_path.name}")
+                        break
+                except Exception:
+                    pass
+                    
+        if calibrated_threshold is not None:
+            threshold = calibrated_threshold
+
         super().__init__("shoplifting_ml", threshold=threshold)
         self.seq_length = seq_length
-        self.buffer = []
         self.cooldown_frames = cooldown_frames
         self.frames_since_last_alert = cooldown_frames
-        # Short-term probability smoothing / consecutive-hit requirements
         self.smoothing_window = int(smoothing_window)
         self.consecutive_required = int(consecutive_required)
         self.prob_buffer = deque(maxlen=self.smoothing_window)
         
-        # Load Model
-        self.model = ActionClassifier(seq_len=seq_length, input_dim=34)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        model_file = Path(model_path).expanduser().resolve()
+        # Initialize Preprocessors
+        self.normalizer = SpatialNormalizer(NormalizationParams(
+            torso_confidence_threshold=0.5,
+            allow_invalid_torso=True
+        ))
+        self.feature_extractor = KinematicFeatureExtractor()
+        
+        # Initialize Config dynamically
+        self.config = Phase4Config(
+            sequence_length=self.seq_length,
+            input_size=self.feature_extractor.feature_dim(),
+            hidden_size=128,
+            num_layers=1,
+            attention_size=64,
+            dropout=0.1
+        )
+        
+        self.use_onnx = model_file.suffix.lower() == ".onnx"
+        self.model_loaded = False
+        
         if model_file.exists():
-            self.model.load_state_dict(torch.load(str(model_file), map_location='cpu'))
-            self.model.eval()
-            self.model_loaded = True
-            print(f"[ShopliftingActivityDetector] Loaded model from {model_file} successfully.")
-        else:
-            print(f"[WARNING] ML Model not found at {model_file} - Shoplifting detector disabled.")
-            self.model_loaded = False
-            
-    def _normalize_window(self, kpts):
-        """Matches the normalization done in training script (min-max bounding box locally)"""
-        normalized = np.zeros_like(kpts)
-        for t in range(kpts.shape[0]):
-            frame_kpts = kpts[t]
-            valid_kpts = frame_kpts[~np.isnan(frame_kpts).any(axis=1)]
-            if len(valid_kpts) > 0:
-                min_xy = np.min(valid_kpts, axis=0)
-                max_xy = np.max(valid_kpts, axis=0)
-                range_xy = np.maximum(max_xy - min_xy, 1e-5)
-                # Keep the same formula as training:
-                normalized[t] = (frame_kpts - min_xy) / range_xy
-                # MUST FLIP Y-AXIS TO MATCH OPENPOSE COCO FORMAT FROM TRAINING!
-                normalized[t, :, 1] = 1.0 - normalized[t, :, 1]
+            if self.use_onnx:
+                import onnxruntime as ort
+                self.ort_session = ort.InferenceSession(str(model_file), providers=['CPUExecutionProvider'])
+                self.model_loaded = True
+                print(f"[ShopliftingActivityDetector] Loaded ONNX LSTM model from {model_file} successfully.")
             else:
-                normalized[t] = frame_kpts
-        return np.nan_to_num(normalized)
+                self.model = Phase4Classifier(self.config).to(self.device)
+                checkpoint = torch.load(str(model_file), map_location=self.device, weights_only=False)
+                if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                    self.model.load_state_dict(checkpoint["model_state_dict"])
+                else:
+                    self.model.load_state_dict(checkpoint)
+                self.model.eval()
+                self.model_loaded = True
+                print(f"[ShopliftingActivityDetector] Loaded PyTorch LSTM model from {model_file} successfully.")
+        else:
+            print(f"[WARNING] LSTM Model not found at {model_file} - Shoplifting detector disabled.")
             
-    def detecta(self, keypoints: List[tuple], scores: List[float], 
-                frame_id: int, timestamp: float) -> Optional[SuspiciousEvent]:
+        # Pose and score sequence buffers
+        self.pose_buffer = deque(maxlen=self.seq_length)
         
+    def detecta(
+        self, 
+        keypoints: List[tuple], 
+        scores: List[float], 
+        frame_id: int, 
+        timestamp: float
+    ) -> Optional[SuspiciousEvent]:
         self.frames_since_last_alert += 1
         
         if not self.model_loaded:
             return None
             
-        kp_array = np.array(keypoints, dtype=np.float32)
+        raw_keypoints = np.asarray(keypoints, dtype=np.float32).reshape(17, 2)
+        raw_scores = np.asarray(scores, dtype=np.float32).reshape(17)
         
-        self.buffer.append(kp_array)
-        if len(self.buffer) > self.seq_length:
-            self.buffer.pop(0)
-            
-        if len(self.buffer) < self.seq_length:
+        # Normalize frame pose
+        normalized_pose = self.normalizer.normalize(raw_keypoints, raw_scores)
+        
+        # Append to rolling buffer
+        self.pose_buffer.append((normalized_pose.keypoints, raw_scores))
+        
+        if len(self.pose_buffer) < self.seq_length:
             return None
             
-        # Inference preparation
-        window = np.stack(self.buffer) # (30, 17, 2)
-        norm_window = self._normalize_window(window) # Normalize window
+        # Preprocess sequence for inference
+        normalized_keypoints_list = np.array([kp for kp, _ in self.pose_buffer])  # (T, 17, 2)
+        coords_batch = normalized_keypoints_list.astype(np.float32)[np.newaxis, :, :, :]  # (1, T, 17, 2)
         
-        # Add debugging out to see scale.
-        # print("raw temp std:", window.std(), "norm temp std:", norm_window.std())
-        if self.frames_since_last_alert % 5 == 0:
-            print("norm_window first 3kpts of first frame:\n", norm_window[0][:3])
+        # Extract features
+        features_batch = self.feature_extractor.transform(coords_batch)  # (1, T, input_size)
+        
+        if self.use_onnx:
+            ort_inputs = {self.ort_session.get_inputs()[0].name: features_batch.astype(np.float32)}
+            ort_outs = self.ort_session.run(None, ort_inputs)
+            logit = float(ort_outs[0][0])
+            prob = 1.0 / (1.0 + np.exp(-logit))
+        else:
+            features_tensor = torch.from_numpy(features_batch).float().to(self.device)
+            with torch.no_grad():
+                logits, _ = self.model(features_tensor)
+                prob = torch.sigmoid(logits).item()
             
-        input_tensor = torch.tensor(norm_window, dtype=torch.float32).unsqueeze(0) # (1, 30, 17, 2)
+        # Apply smoothing / consecutive hit evaluation
+        self.prob_buffer.append(prob)
         
-        with torch.no_grad():
-            output = self.model(input_tensor)
-            probs = torch.nn.functional.softmax(output, dim=1)
-            suspicious_prob = probs[0, 1].item()
-
-        # Append to short-term buffer and evaluate consecutive hits
-        self.prob_buffer.append(suspicious_prob)
-
-        # Debugging the inference to understand what the model sees internally
-        print(f"Frame {frame_id} | suspicious prob: {suspicious_prob:.3f} | recent: {[round(p,3) for p in list(self.prob_buffer)]}")
-
-        # Count how many recent windows exceed the per-window threshold
+        if frame_id % 5 == 0:
+            print(f"[MLP-LSTM] Frame {frame_id} | suspicious prob: {prob:.3f} | recent: {[round(p, 3) for p in list(self.prob_buffer)]}")
+            
+        # Count recent windows exceeding threshold
         high_count = sum(1 for p in self.prob_buffer if p >= self.threshold)
-
+        
         if high_count >= self.consecutive_required and self.frames_since_last_alert >= self.cooldown_frames:
             self.frames_since_last_alert = 0
-
-            # To avoid rapid re-triggering, clear the short-term buffer and half the keypoint buffer
             self.prob_buffer.clear()
-            self.buffer = self.buffer[self.seq_length // 2:]
-
+            # Retain only half the buffer to prevent rapid consecutive alerts
+            for _ in range(self.seq_length // 2):
+                if self.pose_buffer:
+                    self.pose_buffer.popleft()
+                    
             return SuspiciousEvent(
                 tipo=self.nome,
                 timestamp=timestamp,
-                confianca=float(suspicious_prob),
+                confianca=float(prob),
                 frame_id=frame_id,
-                descricao=f"Classificador ML detectou SHOPLIFTING (Prob: {suspicious_prob*100:.1f}%)",
-                dados_adicionais={"model": "MLP_temporal_30f", "probability": float(suspicious_prob), "recent_count": int(high_count)}
+                descricao=f"Classificador LSTM detectou SHOPLIFTING (Prob: {prob*100:.1f}%)",
+                dados_adicionais={"model": "LSTM_attention_30f", "probability": float(prob), "recent_count": int(high_count)}
             )
-
+            
         return None

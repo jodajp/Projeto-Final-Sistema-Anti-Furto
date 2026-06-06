@@ -125,10 +125,6 @@ class SpatialNormalizer:
                 allow_invalid_torso=spatial_cfg.get("allow_invalid_torso", False),
             )
         self._prev_valid_pose: Optional[NormalizedPose] = None
-        rprint(
-            f"[NORMALIZER] Initialized with torso_confidence_threshold="
-            f"{self.params.torso_confidence_threshold}"
-        )
     
     def normalize(
         self,
@@ -184,6 +180,14 @@ class SpatialNormalizer:
         
         # Check torso validity
         is_valid = bool(torso_conf >= self.params.torso_confidence_threshold)
+        
+        # Virtual Pelvis Fallback for waist-up/occluded hips
+        if not is_valid and neck_conf >= self.params.torso_confidence_threshold:
+            # Estimate pelvis as neck + [0, 1.2 * shoulder_width]
+            shoulder_width = np.float32(np.linalg.norm(shoulder_left - shoulder_right))
+            if shoulder_width >= self.params.min_torso_length_px:
+                pelvis = neck + np.array([0.0, 1.2 * shoulder_width], dtype=np.float32)
+                is_valid = True
         
         if not is_valid:
             # Return invalid frame with NaNs
