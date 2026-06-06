@@ -7,7 +7,9 @@ from typing import Optional
 from datetime import datetime
 import os
 from pathlib import Path
-from pydantic import BaseModel
+from app.models.alertasincronizado import AlertaSincronizado
+from app.models.scalerequest import ScaleRequest
+
 import httpx
 
 # Importações corretas com o Splitting de Leitura/Escrita
@@ -37,11 +39,6 @@ os.makedirs(METRICAS_DIR, exist_ok=True)
 def read_root():
     return {"status": "A Corner Enterprise API está a correr a 100% com Separação de Tráfego!"}
 
-class AlertaSincronizado(BaseModel):
-    track_id: int
-    tipo_alerta: str
-    confianca: float
-    timestamp: str
 
 # ============ ENDPOINTS DE ALERTAS ============
 
@@ -235,8 +232,7 @@ async def get_infrastructure_status():
     except Exception as e:
         return {"error": f"Falha ao conectar ao Swarm: {str(e)}"}
 
-class ScaleRequest(BaseModel):
-    replicas: int
+
 
 @app.post("/api/infra/services/{service_id}/scale")
 async def scale_infrastructure_service(service_id: str, req: ScaleRequest):
