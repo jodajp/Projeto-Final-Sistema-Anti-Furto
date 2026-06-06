@@ -12,7 +12,7 @@ services:
     networks:
       - rede_cluster              
     deploy:
-      replicas: 2
+      replicas: 3
       update_config:
         parallelism: 1
         delay: 10s
@@ -28,7 +28,7 @@ services:
     networks:
       - rede_cluster
     deploy:
-      replicas: 1
+      replicas: 2
       restart_policy:
         condition: on-failure
 
