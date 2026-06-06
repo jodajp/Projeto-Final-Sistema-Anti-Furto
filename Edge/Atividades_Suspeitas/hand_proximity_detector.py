@@ -3,15 +3,10 @@ Detector de Proximidade das Mãos (Ocultação de Produtos)
 Detecta quando as mãos (pulsos) se aproximam ou permanecem na zona dos bolsos/cintura.
 """
 
-from typing import List, Optional, Dict
+from typing import List, Optional
 import numpy as np
 from .base_activity import BaseActivity, SuspiciousEvent
-
-# Índices COCO 17
-PULSO_ESQ = 9
-PULSO_DIR = 10
-QUADRIL_ESQ = 11
-QUADRIL_DIR = 12
+from Detecao.skeleton import LEFT_WRIST, RIGHT_WRIST, LEFT_HIP, RIGHT_HIP
 
 class HandProximityDetector(BaseActivity):
     """Detecta ocultação de produtos analisando a distância das mãos ao tronco/bolsos."""
@@ -39,25 +34,25 @@ class HandProximityDetector(BaseActivity):
             return None
             
         # Converter para arrays NumPy para vetorização (Performance Edge)
-        kp = np.array(keypoints, dtype=np.float32)
-        sc = np.array(scores, dtype=np.float32)
+        kp = np.asarray(keypoints, dtype=np.float32)
+        sc = np.asarray(scores, dtype=np.float32)
         
         # Acha os bolsos/cintura (quadris)
-        valid_hips = sc[[QUADRIL_ESQ, QUADRIL_DIR]] > 0.3
+        valid_hips = sc[[LEFT_HIP, RIGHT_HIP]] > 0.3
         if not valid_hips.any():
             self.frames_em_risco = 0
             return None
         
         # Calcula o centro geométrico da cintura vetorizadamente
-        pocket_center = kp[[QUADRIL_ESQ, QUADRIL_DIR]][valid_hips].mean(axis=0)
+        pocket_center = kp[[LEFT_HIP, RIGHT_HIP]][valid_hips].mean(axis=0)
         
         # Filtrar os pulsos válidos
-        valid_wrists = sc[[PULSO_ESQ, PULSO_DIR]] > 0.3
+        valid_wrists = sc[[LEFT_WRIST, RIGHT_WRIST]] > 0.3
         if not valid_wrists.any():
             self.frames_em_risco = 0
             return None
         
-        wrists_kp = kp[[PULSO_ESQ, PULSO_DIR]][valid_wrists]
+        wrists_kp = kp[[LEFT_WRIST, RIGHT_WRIST]][valid_wrists]
         
         # Calcula a distâncias de todos os pulsos válidos ao centro dos bolsos de uma só vez
         distances = np.linalg.norm(wrists_kp - pocket_center, axis=1)

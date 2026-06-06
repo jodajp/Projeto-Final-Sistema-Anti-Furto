@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from typing import List, Tuple
-
 import numpy as np
 from numpy.typing import NDArray
+from Detecao.skeleton import DEFAULT_LIMBS
+
 
 
 @dataclass(frozen=True)
@@ -30,16 +31,8 @@ class KinematicFeatureExtractor:
     # 9: left_wrist, 10: right_wrist, 11: left_hip, 12: right_hip,
     # 13: left_knee, 14: right_knee, 15: left_ankle, 16: right_ankle
 
-    DEFAULT_LIMBS: List[Tuple[int, int]] = [
-        (5, 7),  # left_shoulder -> left_elbow
-        (6, 8),  # right_shoulder -> right_elbow
-        (7, 9),  # left_elbow -> left_wrist
-        (8, 10),  # right_elbow -> right_wrist
-        (11, 13),  # left_hip -> left_knee
-        (12, 14),  # right_hip -> right_knee
-        (13, 15),  # left_knee -> left_ankle
-        (14, 16),  # right_knee -> right_ankle
-    ]
+    DEFAULT_LIMBS: List[Tuple[int, int]] = DEFAULT_LIMBS
+
 
     def __init__(self, limbs: List[Tuple[int, int]] = None, config: KinematicConfig = KinematicConfig()) -> None:
         self.limbs = limbs if limbs is not None else self.DEFAULT_LIMBS

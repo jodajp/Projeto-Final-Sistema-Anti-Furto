@@ -19,32 +19,14 @@ import numpy as np
 from rich import print as rprint
 
 
-# COCO 17 Keypoint Indices (RTMPose format)
-COCO_KEYPOINT_NAMES = [
-    'nose',           # 0
-    'left_eye',       # 1
-    'right_eye',      # 2
-    'left_ear',       # 3
-    'right_ear',      # 4
-    'left_shoulder',  # 5
-    'right_shoulder', # 6
-    'left_elbow',     # 7
-    'right_elbow',    # 8
-    'left_wrist',     # 9
-    'right_wrist',    # 10
-    'left_hip',       # 11 (pelvis left)
-    'right_hip',      # 12 (pelvis right)
-    'left_knee',      # 13
-    'right_knee',     # 14
-    'left_ankle',     # 15
-    'right_ankle',    # 16
-]
+from Detecao.skeleton import (
+    KEYPOINT_NAMES as COCO_KEYPOINT_NAMES,
+    LEFT_HIP as PELVIS_LEFT_IDX,
+    RIGHT_HIP as PELVIS_RIGHT_IDX,
+    LEFT_SHOULDER as SHOULDER_LEFT_IDX,
+    RIGHT_SHOULDER as SHOULDER_RIGHT_IDX
+)
 
-# Anatomical anchor indices
-PELVIS_LEFT_IDX = 11
-PELVIS_RIGHT_IDX = 12
-SHOULDER_LEFT_IDX = 5
-SHOULDER_RIGHT_IDX = 6
 
 
 @dataclass

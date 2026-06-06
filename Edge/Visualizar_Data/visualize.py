@@ -20,6 +20,10 @@ import cv2
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
 import warnings
+import sys
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
 warnings.filterwarnings('ignore')
 
@@ -27,20 +31,8 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # ============================================================================
 
-# COCO 17-point skeleton
-COCO_SKELETON = [
-    (0, 1), (0, 2), (1, 3), (2, 4),  # head
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),  # arms
-    (5, 11), (6, 12), (11, 12),  # torso
-    (11, 13), (13, 15), (12, 14), (14, 16)  # legs
-]
+from Detecao.skeleton import SKELETON_CONNECTIONS, KEYPOINT_NAMES
 
-COCO_JOINTS = [
-    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
-    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-    "left_wrist", "right_wrist", "left_hip", "right_hip",
-    "left_knee", "right_knee", "left_ankle", "right_ankle"
-]
 
 HAND_INDICES = [9, 10, 11, 6, 7, 8]  # Wrists and elbows
 TORSO_INDICES = [5, 6, 11, 12]  # Shoulders and hips
@@ -239,7 +231,7 @@ def draw_skeleton(frame, kp_array, person_id=None, gt_label=None, hand_risk=0.0,
     kp_norm = normalize_skeleton(kp_array, conf_threshold)
     
     # Draw skeleton edges
-    for j1, j2 in COCO_SKELETON:
+    for j1, j2 in SKELETON_CONNECTIONS:
         if kp_norm[j1, 2] < conf_threshold or kp_norm[j2, 2] < conf_threshold:
             continue
         

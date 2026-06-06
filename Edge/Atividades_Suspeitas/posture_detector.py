@@ -6,16 +6,9 @@ Detecta quando pessoa está agachada (típico de roubo em loja)
 from typing import List, Optional
 from .base_activity import BaseActivity, SuspiciousEvent
 import numpy as np
+from Detecao.skeleton import NOSE, LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP, LEFT_ANKLE, RIGHT_ANKLE
 
-# Índices de keypoints para o corpo (COCO 17)
-NOSE = 0
-NECK = 1  # Média dos ombros
-OMBRO_ESQ = 5
-OMBRO_DIR = 6
-QUADRIL_ESQ = 11
-QUADRIL_DIR = 12
-TORNOZELO_ESQ = 15
-TORNOZELO_DIR = 16
+# NECK não é um keypoint padrão do COCO 17; é computado a partir dos ombros.
 
 class PostureDetector(BaseActivity):
     """Detecta postura (agachamento, deitado, etc)."""
@@ -45,7 +38,7 @@ class PostureDetector(BaseActivity):
             return None
         
         # Verifica confiança dos keypoints importantes
-        keypoints_importantes = [OMBRO_ESQ, OMBRO_DIR, QUADRIL_ESQ, QUADRIL_DIR, TORNOZELO_ESQ, TORNOZELO_DIR]
+        keypoints_importantes = [LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP, LEFT_ANKLE, RIGHT_ANKLE]
         
         confiancas_validas = all(
             i < len(scores) and scores[i] > 0.3 
@@ -57,9 +50,9 @@ class PostureDetector(BaseActivity):
             return None
         
         # Calcula alturas
-        altura_ombros = (keypoints[OMBRO_ESQ][1] + keypoints[OMBRO_DIR][1]) / 2
-        altura_quadris = (keypoints[QUADRIL_ESQ][1] + keypoints[QUADRIL_DIR][1]) / 2
-        altura_tornozelos = (keypoints[TORNOZELO_ESQ][1] + keypoints[TORNOZELO_DIR][1]) / 2
+        altura_ombros = (keypoints[LEFT_SHOULDER][1] + keypoints[RIGHT_SHOULDER][1]) / 2
+        altura_quadris = (keypoints[LEFT_HIP][1] + keypoints[RIGHT_HIP][1]) / 2
+        altura_tornozelos = (keypoints[LEFT_ANKLE][1] + keypoints[RIGHT_ANKLE][1]) / 2
         
         # Altura total do corpo
         altura_total = altura_tornozelos - altura_ombros

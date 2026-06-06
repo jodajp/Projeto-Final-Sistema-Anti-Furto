@@ -13,26 +13,15 @@ import cv2
 from rich import print as rprint
 
 
-# COCO 17 keypoint skeleton connections
-# Each tuple (i, j) means: draw line from keypoint i to keypoint j
-SKELETON_CONNECTIONS = [
-    (0, 1), (0, 2),           # nose -> eyes
-    (1, 3), (2, 4),           # eyes -> ears
-    (5, 6),                   # shoulders
-    (5, 7), (6, 8),           # shoulders -> elbows
-    (7, 9), (8, 10),          # elbows -> wrists
-    (11, 12),                 # hips (pelvis)
-    (5, 11), (6, 12),         # shoulders -> hips
-    (11, 13), (12, 14),       # hips -> knees
-    (13, 15), (14, 16),       # knees -> ankles
-]
+from Detecao.skeleton import (
+    SKELETON_CONNECTIONS,
+    KEYPOINT_NAMES,
+    LEFT_HIP,
+    RIGHT_HIP,
+    LEFT_SHOULDER,
+    RIGHT_SHOULDER
+)
 
-KEYPOINT_NAMES = [
-    'nose', 'l_eye', 'r_eye', 'l_ear', 'r_ear',
-    'l_sho', 'r_sho', 'l_elb', 'r_elb', 'l_wri',
-    'r_wri', 'l_hip', 'r_hip', 'l_kne', 'r_kne',
-    'l_ank', 'r_ank'
-]
 
 # Color scheme: BGR (OpenCV format)
 COLOR_SKELETON_LINE = (0, 255, 255)    # Cyan
@@ -172,12 +161,13 @@ class SkeletonVisualizer:
             conf = scores[idx]
             
             # Special colors for torso anchors
-            if idx in [11, 12]:  # Pelvis
+            if idx in [LEFT_HIP, RIGHT_HIP]:  # Pelvis
                 color = COLOR_PELVIS
                 radius = self.point_radius + 1
-            elif idx in [5, 6]:  # Shoulders (neck anchor)
+            elif idx in [LEFT_SHOULDER, RIGHT_SHOULDER]:  # Shoulders (neck anchor)
                 color = COLOR_NECK
                 radius = self.point_radius + 1
+
             else:
                 color = COLOR_KEYPOINT
                 radius = self.point_radius

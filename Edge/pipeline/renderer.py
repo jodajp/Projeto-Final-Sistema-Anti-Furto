@@ -4,12 +4,8 @@ import cv2
 import numpy as np
 
 
-COCO_SKELETON = [
-    (0, 1), (0, 2), (1, 3), (2, 4),
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
-    (5, 11), (6, 12), (11, 12),
-    (11, 13), (13, 15), (12, 14), (14, 16),
-]
+from Detecao.skeleton import SKELETON_CONNECTIONS
+
 
 
 def _to_color(value, fallback):
@@ -44,7 +40,7 @@ class PoseRenderer:
         self.color_muted = _to_color(colors.get("muted"), (200, 200, 200))
 
     def _draw_pose(self, image, keypoints, scores, line_color, point_color):
-        for i, j in COCO_SKELETON:
+        for i, j in SKELETON_CONNECTIONS:
             if i >= len(keypoints) or j >= len(keypoints):
                 continue
 

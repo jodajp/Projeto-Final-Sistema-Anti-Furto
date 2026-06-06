@@ -18,8 +18,14 @@ from pathlib import Path
 from scipy.interpolate import interp1d
 from tqdm import tqdm
 import argparse
+import sys
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
 
 # ============================================================================
 # CONFIGURATION
@@ -62,18 +68,8 @@ CONFIG = Config()
 # COCO SKELETON DEFINITION
 # ============================================================================
 
-COCO_SKELETON = [
-    (0, 1), (0, 2), (1, 3), (2, 4), (5, 6), (5, 7), (7, 9),
-    (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15),
-    (12, 14), (14, 16)
-]
+from Detecao.skeleton import SKELETON_CONNECTIONS, KEYPOINT_NAMES as COCO_JOINT_NAMES
 
-COCO_JOINT_NAMES = [
-    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
-    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-    "left_wrist", "right_wrist", "left_hip", "right_hip",
-    "left_knee", "right_knee", "left_ankle", "right_ankle"
-]
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -210,7 +206,7 @@ def draw_skeleton(frame: np.ndarray,
     kp_display[:, 1] = CONFIG.FRAME_HEIGHT - kp_display[:, 1]
     
     # Draw skeleton edges
-    for joint_from, joint_to in COCO_SKELETON:
+    for joint_from, joint_to in SKELETON_CONNECTIONS:
         if joint_from >= len(kp_display) or joint_to >= len(kp_display):
             continue
         
