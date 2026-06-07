@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import json
 import os
+import socket
+import hashlib
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -79,7 +81,7 @@ class AntiTheftOrchestrator:
         # Configuração de guarda de métricas
         self.metricas_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Metricas')
         os.makedirs(self.metricas_dir, exist_ok=True)
-        self.node_id = os.getenv('NODE_ID', 'node1')  # Permite configurar node_id via variável de ambiente
+        self.node_id = self._resolve_node_id()  # ID único por máquina
         self.metricas_intervalo = 300  # Guardar métricas a cada 300 frames (~10 segundos a 30fps)
         self.ultimo_frame_metricas = 0
         
@@ -88,6 +90,49 @@ class AntiTheftOrchestrator:
         self.ultimo_frame_web = 0
         self.frame_web_path = os.path.join(self.metricas_dir, 'last_frame.jpg')
 
+
+    @staticmethod
+    def _resolve_node_id() -> str:
+        # 1. Variável de ambiente tem prioridade absoluta
+        env_id = os.getenv('NODE_ID', '').strip()
+        if env_id:
+            print(f"[NODE] ID configurado via env: {env_id}")
+            return env_id
+
+        # 2. Deriva do hostname da máquina
+        try:
+            hostname = socket.gethostname().strip().lower()
+        except Exception:
+            hostname = ""
+
+        if hostname:
+            # Sanitiza: mantém apenas letras, números e hífens
+            safe = "".join(c if c.isalnum() or c == "-" else "-" for c in hostname)
+            safe = safe.strip("-")
+
+            # Se já parece um node (começa por "node"), usa diretamente
+            if safe.startswith("node"):
+                node_id = safe
+            else:
+                node_id = f"node-{safe}"
+
+            print(f"[NODE] ID derivado do hostname '{hostname}': {node_id}")
+            return node_id
+
+        # 3. Fallback improvável: hash curto do MAC address
+        try:
+            import uuid
+            mac = uuid.getnode()
+            short_hash = hashlib.md5(str(mac).encode()).hexdigest()[:6]
+            node_id = f"node-{short_hash}"
+            print(f"[NODE] ID derivado do MAC (fallback): {node_id}")
+            return node_id
+        except Exception:
+            pass
+
+        # 4. Último recurso
+        print("[NODE] Não foi possível determinar ID único. A usar 'node-unknown'.")
+        return "node-unknown"
 
     def _print_startup(self):
         print("\n" + "=" * 60)
