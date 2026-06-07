@@ -48,6 +48,8 @@ services:
     volumes:
       - dados_master:/bitnami/postgresql
     deploy:
+      placement:
+        constraints: [node.role == manager]
       restart_policy:
         condition: on-failure
 
@@ -60,13 +62,17 @@ services:
       - POSTGRESQL_REPLICATION_USER=repl_user   # Usa o mesmo utilizador de cópia
       - POSTGRESQL_REPLICATION_PASSWORD=senha_replica
       - POSTGRESQL_PASSWORD=123
+      - POSTGRESQL_PASSWORD_FILE=/bitnami/postgresql/.password
     networks:
       - rede_cluster
     volumes:
       - dados_replica:/bitnami/postgresql
     deploy:
+      placement:
+        constraints: [node.role != manager]
       restart_policy:
         condition: on-failure
+        delay: 10s
 
   docker-proxy:
       image: tecnativa/docker-socket-proxy
