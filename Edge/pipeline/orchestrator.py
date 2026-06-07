@@ -318,12 +318,16 @@ class AntiTheftOrchestrator:
         """Executa a lógica de detecção de furto e grava na base de dados SQLite."""
         alert_text = None
         for ent in entidades:
+            track_id = ent.get('id')
+            if track_id is None or track_id == '...':
+                continue
+
             for activity in self.activities:
-                event = activity.detecta(ent['kpts'], ent['scrs'], self.metrics.frame_count, timestamp)
+                event = activity.detecta(ent['kpts'], ent['scrs'], self.metrics.frame_count, timestamp, track_id=track_id)
                 if event:
                     self.alert_dispatcher.dispatch(event)
                     alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
-                    self.db.salvar_alerta(ent['id'], event.tipo, event.confianca * 100)
+                    self.db.salvar_alerta(track_id, event.tipo, event.confianca * 100)
         return alert_text
 
     def _desenhar_caixas(self, frame, entidades):
@@ -348,6 +352,11 @@ class AntiTheftOrchestrator:
         self.last_tracked_objects = self.tracker.update(bboxes, frame_shape[:2])
         self.metrics.on_detection()
         self._atribuir_ids(entidades)
+
+        # Pruning of activities instances to avoid memory leakage/stale buffers
+        ids_presentes = {ent['id'] for ent in entidades if ent.get('id') is not None and ent.get('id') != '...'}
+        for activity in self.activities:
+            activity.limpa_tracks_inativas(ids_presentes)
 
         if self.temporal_filter.is_enabled():
             ids_presentes = {ent['id'] for ent in entidades if ent.get('id') is not None}
