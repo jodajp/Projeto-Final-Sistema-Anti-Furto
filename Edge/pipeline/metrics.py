@@ -44,4 +44,4 @@ class PipelineMetrics:
     def success_rate(self) -> float:
         if self.inference_calls == 0:
             return 0.0
-        return (self.detection_count / self.inference_calls) * 100.0
+        return ((self.detection_count / self.inference_calls) * 100.0 / self.frame_skip)
