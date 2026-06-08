@@ -10,7 +10,6 @@ Designed for real-time sanity checking of translation and scale invariance.
 from typing import Optional, Tuple
 import numpy as np
 import cv2
-from rich import print as rprint
 
 
 from Detecao.skeleton import (

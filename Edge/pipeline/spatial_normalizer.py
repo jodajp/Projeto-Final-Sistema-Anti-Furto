@@ -16,8 +16,6 @@ Key Features:
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import numpy as np
-from rich import print as rprint
-
 
 from Detecao.skeleton import (
     KEYPOINT_NAMES as COCO_KEYPOINT_NAMES,

@@ -1,7 +1,7 @@
 """Carregamento dinâmico de plugins no formato module.path:ClassName."""
 
 from importlib import import_module
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 class PluginError(RuntimeError):
@@ -47,3 +47,29 @@ def instantiate_from_spec(spec: Dict[str, Any], key: str = "plugin"):
         raise PluginError(f"Spec de plugin sem chave '{key}': {spec}")
 
     return instantiate(plugin_path, spec.get("params", {}))
+
+
+def load_activities(specs: List[Dict[str, Any]]):
+    """Carrega atividades habilitadas com contrato BaseActivity.detecta."""
+    activities = []
+    for spec in specs:
+        if not spec.get("enabled", True):
+            continue
+        activity = instantiate_from_spec(spec)
+        if not hasattr(activity, "detecta"):
+            raise TypeError(f"Plugin de atividade sem metodo detecta: {spec.get('plugin')}")
+        activities.append(activity)
+    return activities
+
+
+def load_alert_handlers(specs: List[Dict[str, Any]]):
+    """Carrega handlers habilitados com contrato registra_evento."""
+    handlers = []
+    for spec in specs:
+        if not spec.get("enabled", True):
+            continue
+        handler = instantiate_from_spec(spec)
+        if not hasattr(handler, "registra_evento"):
+            raise TypeError(f"Handler de alerta sem metodo registra_evento: {spec.get('plugin')}")
+        handlers.append(handler)
+    return handlers

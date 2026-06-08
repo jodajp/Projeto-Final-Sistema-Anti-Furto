@@ -1,14 +1,8 @@
 from typing import List, Optional
 import numpy as np
-import sys
-from pathlib import Path
 from collections import deque
 import json
-
-# Fix absolute imports for when loaded as a plugin
-ROOT_DIR = Path(__file__).resolve().parent.parent
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
+from pathlib import Path
 
 from .base_activity import BaseActivity, SuspiciousEvent
 from pipeline.kinematic_features import KinematicFeatureExtractor
