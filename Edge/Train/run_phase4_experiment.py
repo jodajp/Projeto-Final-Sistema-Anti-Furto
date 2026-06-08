@@ -238,61 +238,7 @@ def collect_predictions(model: torch.nn.Module, dataloader: DataLoader, device: 
     return {"probabilities": probabilities, "labels": labels, "sources": sources}
 
 
-def best_threshold(probabilities: Sequence[float], labels: Sequence[int], metric: str = "hprs") -> Tuple[float, Dict[str, float]]:
-    probs = np.asarray(probabilities, dtype=np.float32)
-    y_true = np.asarray(labels, dtype=np.int32)
-    if len(probs) == 0:
-        return 0.5, {"f1": 0.0, "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "specificity": 0.0, "hprs": 0.0}
-
-    best_t = 0.5
-    best_score = -1.0
-    best_metrics: Dict[str, float] = {}
-
-    for threshold in np.linspace(0.05, 0.95, 181):
-        y_pred = (probs >= threshold).astype(np.int32)
-        tp = int(((y_pred == 1) & (y_true == 1)).sum())
-        tn = int(((y_pred == 0) & (y_true == 0)).sum())
-        fp = int(((y_pred == 1) & (y_true == 0)).sum())
-        fn = int(((y_pred == 0) & (y_true == 1)).sum())
-
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-        accuracy = (tp + tn) / max(1, len(y_true))
-        
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
-        
-        # HPRS score: harmonic mean of precision, recall, and specificity
-        if precision > 0 and recall > 0 and specificity > 0:
-            hprs = 3 / (1.0 / precision + 1.0 / recall + 1.0 / specificity)
-        else:
-            hprs = 0.0
-
-        score = hprs if metric == "hprs" else f1
-        if score > best_score:
-            best_score = score
-            best_t = float(threshold)
-            best_metrics = {
-                "precision": float(precision),
-                "recall": float(recall),
-                "specificity": float(specificity),
-                "f1": float(f1),
-                "hprs": float(hprs),
-                "accuracy": float(accuracy),
-                "tp": float(tp),
-                "tn": float(tn),
-                "fp": float(fp),
-                "fn": float(fn),
-            }
-
-    return best_t, best_metrics
-
-
-def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], threshold: float) -> Dict[str, float]:
-    probs = np.asarray(probabilities, dtype=np.float32)
-    y_true = np.asarray(labels, dtype=np.int32)
-    y_pred = (probs >= threshold).astype(np.int32)
-
+def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     tp = int(((y_pred == 1) & (y_true == 1)).sum())
     tn = int(((y_pred == 0) & (y_true == 0)).sum())
     fp = int(((y_pred == 1) & (y_true == 0)).sum())
@@ -310,7 +256,6 @@ def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], thr
         hprs = 0.0
 
     return {
-        "threshold": float(threshold),
         "precision": float(precision),
         "recall": float(recall),
         "specificity": float(specificity),
@@ -322,6 +267,37 @@ def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], thr
         "fp": float(fp),
         "fn": float(fn),
     }
+
+
+def best_threshold(probabilities: Sequence[float], labels: Sequence[int], metric: str = "hprs") -> Tuple[float, Dict[str, float]]:
+    probs = np.asarray(probabilities, dtype=np.float32)
+    y_true = np.asarray(labels, dtype=np.int32)
+    if len(probs) == 0:
+        return 0.5, {"f1": 0.0, "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "specificity": 0.0, "hprs": 0.0}
+
+    best_t = 0.5
+    best_score = -1.0
+    best_metrics: Dict[str, float] = {}
+
+    for threshold in np.linspace(0.05, 0.95, 181):
+        y_pred = (probs >= threshold).astype(np.int32)
+        metrics = _compute_metrics(y_true, y_pred)
+        score = metrics["hprs"] if metric == "hprs" else metrics["f1"]
+        if score > best_score:
+            best_score = score
+            best_t = float(threshold)
+            best_metrics = metrics
+
+    return best_t, best_metrics
+
+
+def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], threshold: float) -> Dict[str, float]:
+    probs = np.asarray(probabilities, dtype=np.float32)
+    y_true = np.asarray(labels, dtype=np.int32)
+    y_pred = (probs >= threshold).astype(np.int32)
+    metrics = _compute_metrics(y_true, y_pred)
+    metrics["threshold"] = float(threshold)
+    return metrics
 
 
 def print_examples(probabilities: Sequence[float], labels: Sequence[int], sources: Sequence[str], threshold: float, limit: int = 10) -> None:

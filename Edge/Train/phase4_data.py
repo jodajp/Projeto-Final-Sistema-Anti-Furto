@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import pickle
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,8 +23,6 @@ from pipeline.spatial_normalizer import NormalizationParams, SpatialNormalizer
 class Phase4DataConfig:
     sequence_length: int = 30
     manual_manifest_path: Path = ROOT_DIR / "Visualizar_Data" / "Output" / "clips" / "clips_manifest.jsonl"
-    manual_pkl_path: Path = ROOT_DIR / "Visualizar_Data" / "Output" / "custom_shoplifting_dataset.pkl"
-    retail_manifests: Tuple[str, ...] = ("manifest_normal_combined.json", "manifest_suspicious_combined.json")
     retail_normal_limit: int = 4
     retail_suspicious_limit: int = 4
     manual_limit: int = 4
@@ -123,7 +120,7 @@ def _normalize_sequence(coords: np.ndarray, scores: np.ndarray) -> Tuple[np.ndar
     return np.asarray(normalized_coords, dtype=np.float32), np.asarray(normalized_scores, dtype=np.float32)
 
 
-def _load_manual_samples(manifest_path: Path, pkl_path: Path, sequence_length: int, limit: int) -> List[Phase4Sample]:
+def _load_manual_samples(manifest_path: Path, sequence_length: int, limit: int) -> List[Phase4Sample]:
     samples: List[Phase4Sample] = []
     if not manifest_path.exists():
         return samples
@@ -173,7 +170,6 @@ def build_phase4_samples(config: Phase4DataConfig) -> List[Phase4Sample]:
     if config.manual_limit > 0:
         manual_samples = _load_manual_samples(
             config.manual_manifest_path,
-            config.manual_pkl_path,
             config.sequence_length,
             config.manual_limit
         )
