@@ -8,7 +8,6 @@ from .spatial_normalizer import (
 )
 from .skeleton_visualizer import (
     SkeletonVisualizer,
-    visualize_normalized_pose,
 )
 from .temporal_pose_filter import (
     TemporalPoseFilter,
@@ -23,7 +22,6 @@ __all__ = [
     "NormalizationParams",
     "NormalizedPose",
     "SkeletonVisualizer",
-    "visualize_normalized_pose",
     "TemporalPoseFilter",
     "KinematicConfig",
     "KinematicFeatureExtractor",

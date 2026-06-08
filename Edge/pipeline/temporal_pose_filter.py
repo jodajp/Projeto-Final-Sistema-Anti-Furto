@@ -109,6 +109,7 @@ class TemporalPoseFilter:
             raw_config.get("head_rapid_movement_threshold", self.rapid_movement_threshold)
         )
         self.last_constraint_violation_count = 0
+        self.limb_pairs_arr = np.asarray(self.LIMB_PAIRS)
 
         self.state: Optional[AdaptiveFilterState] = None
 
@@ -120,11 +121,8 @@ class TemporalPoseFilter:
 
     def _compute_limb_lengths(self, keypoints: np.ndarray) -> np.ndarray:
         """Compute all limb lengths. Shape (num_limbs,)."""
-        lengths = []
-        for parent, child in self.LIMB_PAIRS:
-            length = np.linalg.norm(keypoints[child] - keypoints[parent])
-            lengths.append(length)
-        return np.array(lengths)
+        diffs = keypoints[self.limb_pairs_arr[:, 1]] - keypoints[self.limb_pairs_arr[:, 0]]
+        return np.linalg.norm(diffs, axis=1)
 
     def _check_limb_stretching(self, keypoints: np.ndarray) -> np.ndarray:
         """
@@ -137,14 +135,11 @@ class TemporalPoseFilter:
         current_lengths = self._compute_limb_lengths(keypoints)
         stretch_ratios = current_lengths / (self.state.baseline_limb_lengths + 1e-8)
 
-        # Flag limbs that are stretching too much
         anomalous_limbs = stretch_ratios > self.limb_stretch_threshold
         affected_keypoints = np.zeros(17, dtype=bool)
-
-        for i, (parent, child) in enumerate(self.LIMB_PAIRS):
-            if anomalous_limbs[i]:
-                affected_keypoints[parent] = True
-                affected_keypoints[child] = True
+        if np.any(anomalous_limbs):
+            bad_indices = self.limb_pairs_arr[anomalous_limbs].flatten()
+            affected_keypoints[bad_indices] = True
 
         return affected_keypoints
 

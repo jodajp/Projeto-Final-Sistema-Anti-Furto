@@ -14,13 +14,6 @@ def _to_color(value, fallback):
     return fallback
 
 
-def _is_single_pose(keypoints) -> bool:
-    try:
-        array = np.asarray(keypoints)
-    except Exception:
-        return False
-    return array.ndim == 2 and array.shape == (17, 2)
-
 # Class para renderizar pose e informações na tela
 class PoseRenderer:
     def __init__(self, config: dict):
@@ -41,45 +34,33 @@ class PoseRenderer:
 
     def _draw_pose(self, image, keypoints, scores, line_color, point_color):
         for i, j in SKELETON_CONNECTIONS:
-            if i >= len(keypoints) or j >= len(keypoints):
-                continue
+            if scores[i] > self.confidence_threshold and scores[j] > self.confidence_threshold:
+                xi, yi = int(keypoints[i][0]), int(keypoints[i][1])
+                xj, yj = int(keypoints[j][0]), int(keypoints[j][1])
+                cv2.line(image, (xi, yi), (xj, yj), line_color, 2)
 
-            ci = scores[i] if i < len(scores) else 0.0
-            cj = scores[j] if j < len(scores) else 0.0
-            if ci <= self.confidence_threshold or cj <= self.confidence_threshold:
-                continue
-
-            xi, yi = map(int, keypoints[i])
-            xj, yj = map(int, keypoints[j])
-            cv2.line(image, (xi, yi), (xj, yj), line_color, 2)
-
-        for idx, point in enumerate(keypoints):
-            conf = scores[idx] if idx < len(scores) else 0.0
-            if conf <= self.confidence_threshold:
-                continue
-
-            x, y = int(point[0]), int(point[1])
-            cv2.circle(image, (x, y), 5, point_color, -1)
-            cv2.circle(image, (x, y), 5, (0, 0, 0), 1)
+        for point, conf in zip(keypoints, scores):
+            if conf > self.confidence_threshold:
+                x, y = int(point[0]), int(point[1])
+                cv2.circle(image, (x, y), 5, point_color, -1)
+                cv2.circle(image, (x, y), 5, (0, 0, 0), 1)
 
     def _iter_poses(self, keypoints, scores):
-        if keypoints is None or scores is None:
+        if keypoints is None or scores is None or len(keypoints) == 0:
             return []
 
-        if _is_single_pose(keypoints):
-            return [(np.asarray(keypoints), np.asarray(scores))]
+        k_arr = np.asarray(keypoints)
+        s_arr = np.asarray(scores)
 
-        keypoints_array = np.asarray(keypoints)
-        scores_array = np.asarray(scores)
+        if k_arr.ndim == 2 and k_arr.shape == (17, 2):
+            return [(k_arr, s_arr)]
 
-        if keypoints_array.ndim != 3 or keypoints_array.shape[1:] != (17, 2):
-            return []
+        if k_arr.ndim == 3 and k_arr.shape[1:] == (17, 2):
+            if s_arr.ndim == 1:
+                s_arr = np.repeat(s_arr[np.newaxis, :], len(k_arr), axis=0)
+            return list(zip(k_arr, s_arr))
 
-        if scores_array.ndim == 1:
-            scores_array = np.repeat(scores_array[np.newaxis, :], keypoints_array.shape[0], axis=0)
-
-        count = min(len(keypoints_array), len(scores_array))
-        return [(keypoints_array[i], scores_array[i]) for i in range(count)]
+        return []
 
     def render(self, frame, keypoints, scores):
         if not self.enabled:
