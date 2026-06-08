@@ -1,12 +1,20 @@
 """
 Classe base abstrata para detectores de atividades suspeitas
-Permite adicionar novos tipos de comportamento suspeito facilmente
 """
 
+import sys
+from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Optional, List
-import numpy as np
+
+# Adiciona diretório Edge ao path para resolver imports
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from pipeline.spatial_normalizer import NormalizedPose
+
 
 @dataclass
 class SuspiciousEvent:
@@ -19,6 +27,7 @@ class SuspiciousEvent:
     descricao: str = ""
     dados_adicionais: Dict = None
 
+
 class BaseActivity(ABC):
     """Classe abstrata para todos os detectores de atividade."""
     
@@ -29,22 +38,26 @@ class BaseActivity(ABC):
         
     @abstractmethod
     def detecta(self, 
-                keypoints: List[tuple], 
-                scores: List[float],
+                norm_pose: NormalizedPose,
                 frame_id: int,
-                timestamp: float) -> Optional[SuspiciousEvent]:
+                timestamp: float,
+                track_id: Optional[int] = None) -> Optional[SuspiciousEvent]:
         """
-        Detecta atividade suspeita.
+        Detecta atividade suspeita usando a pose normalizada.
         
         Args:
-            keypoints: Lista de (x, y) para cada keypoint
-            scores: Confiança de cada keypoint
-            frame_id: ID do frame
-            timestamp: Timestamp do frame
+            norm_pose: Objeto contendo os keypoints normalizados e metadados.
+            frame_id: ID do frame.
+            timestamp: Timestamp do frame.
+            track_id: ID do rastreamento (ByteTrack).
             
         Returns:
-            SuspiciousEvent se detectou algo, None caso contrário
+            SuspiciousEvent se detectou algo, None caso contrário.
         """
+        pass
+    
+    def limpa_tracks_inativas(self, ids_presentes: set):
+        """Limpa o estado armazenado para tracks que não estão mais presentes."""
         pass
     
     def registra_evento(self, evento: SuspiciousEvent):

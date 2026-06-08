@@ -63,7 +63,7 @@ class Phase4Inference:
         # Load config (same as training)
         # input_size dynamically derived
         self.config = Phase4Config(
-            sequence_length=30,
+            sequence_length=45,
             input_size=self.feature_extractor.feature_dim(),
             hidden_size=128,
             num_layers=1,
@@ -134,8 +134,8 @@ class Phase4Inference:
         self.visualizer = SkeletonVisualizer(canvas_size=500, show_labels=False, show_confidence=False)
         
         # Inference state
-        self.frame_buffer = deque(maxlen=30)  # Keep last 30 frames for sequence
-        self.prediction_history = deque(maxlen=30)  # For attention visualization
+        self.frame_buffer = deque(maxlen=45)  # Keep last 45 frames for sequence
+        self.prediction_history = deque(maxlen=45)  # For attention visualization
         
     def process_frame(self, frame: np.ndarray) -> InferenceFrame:
         """Process single frame: detect pose, normalize, extract features."""

@@ -152,9 +152,6 @@ class ONNXDetectorImpl:
             # rtmlib handles all preprocessing, inference, and postprocessing
             keypoints, scores = self.model(frame)
             
-            # keypoints shape = (num_people, 17, 2)
-            # scores shape = (num_people, 17)
-            
             # Remove low-confidence detections per frame
             valid_mask = scores.mean(axis=1) > 0.05  # Filter persons with avg confidence < 0.05
             keypoints = keypoints[valid_mask]

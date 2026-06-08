@@ -40,26 +40,6 @@ class Phase4Sample:
     clip_id: str = ""
 
 
-def _ensure_shape_17x2(coords: np.ndarray) -> np.ndarray:
-    arr = np.asarray(coords, dtype=np.float32)
-    if arr.shape == (17, 2):
-        return arr
-    if arr.shape == (34,):
-        return arr.reshape(17, 2)
-    if arr.shape == (51,):
-        return arr.reshape(17, 3)[:, :2]
-    raise ValueError(f"Unsupported coords shape: {arr.shape}")
-
-
-def _ensure_shape_17(scores: np.ndarray) -> np.ndarray:
-    arr = np.asarray(scores, dtype=np.float32)
-    if arr.shape == (17,):
-        return arr
-    if arr.shape == (51,):
-        return arr.reshape(17, 3)[:, 2]
-    raise ValueError(f"Unsupported scores shape: {arr.shape}")
-
-
 def _select_window(coords: np.ndarray, scores: np.ndarray, sequence_length: int) -> Tuple[np.ndarray, np.ndarray]:
     total = int(coords.shape[0])
     if total == 0:
@@ -186,123 +166,55 @@ def _load_manual_samples(manifest_path: Path, pkl_path: Path, sequence_length: i
     return samples
 
 
-def _load_retail_samples(manifest_name: str, sequence_length: int, label_limit: int) -> List[Phase4Sample]:
-    samples: List[Phase4Sample] = []
-    manifest_path = ROOT_DIR / "Visualizar_Data" / "Manifests" / manifest_name
-    data_dir = ROOT_DIR / "Visualizar_Data" / "Data"
-    if not manifest_path.exists():
-        return samples
-
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
-
-    np.random.shuffle(manifest)
-
-    for item in manifest:
-        if len(samples) >= label_limit:
-            break
-
-        dataset_name = item.get("dataset", "Training")
-        source_file = item["source_file"]
-        person_id = str(item.get("original_person_id", "0"))
-        frame_range = item.get("frame_range", [0, 0])
-
-        dataset_name_lower = str(dataset_name).lower()
-
-        if dataset_name_lower.startswith("training"):
-            json_path = data_dir / "RetailS_train" / "pose" / "train" / source_file
-        elif dataset_name_lower.startswith("realworld"):
-            json_path = data_dir / "RetailS_test_realworld" / "pose" / "test" / source_file
-        elif dataset_name_lower.startswith("staged"):
-            json_path = data_dir / "RetailS_test_staged" / "pose" / "test" / source_file
-        else:
-            continue
-
-        if not json_path.exists():
-            continue
-
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                pose_data = json.load(f)
-        except Exception:
-            continue
-
-        actual_person_id = None
-        for pid in pose_data.keys():
-            if str(pid) == person_id:
-                actual_person_id = pid
-                break
-
-        if actual_person_id is None:
-            if len(pose_data) == 1:
-                actual_person_id = list(pose_data.keys())[0]
-            else:
-                continue
-
-        person_frames = pose_data[actual_person_id]
-
-        frame_keys = sorted(int(k) for k in person_frames.keys() if str(k).isdigit())
-        if not frame_keys:
-            continue
-
-        start_f, end_f = int(frame_range[0]), int(frame_range[1])
-        valid_start = max(start_f, frame_keys[0])
-        valid_end = min(end_f, frame_keys[-1])
-        if valid_end < valid_start:
-            continue
-
-        coords_frames: List[np.ndarray] = []
-        scores_frames: List[np.ndarray] = []
-
-        for frame_idx in range(valid_start, valid_end + 1):
-            frame_key = str(frame_idx)
-            if frame_key not in person_frames:
-                if coords_frames:
-                    coords_frames.append(coords_frames[-1])
-                    scores_frames.append(scores_frames[-1])
-                continue
-
-            raw = np.asarray(person_frames[frame_key]["keypoints"], dtype=np.float32)
-            if raw.shape == (51,):
-                coords = raw.reshape(17, 3)[:, :2]
-                scores = raw.reshape(17, 3)[:, 2]
-            elif raw.shape == (34,):
-                coords = raw.reshape(17, 2)
-                scores = np.ones((17,), dtype=np.float32)
-            else:
-                coords = raw.reshape(17, 2)
-                scores = np.ones((17,), dtype=np.float32)
-
-            coords_frames.append(coords)
-            scores_frames.append(scores)
-
-        if len(coords_frames) < 2:
-            continue
-
-        coords = np.asarray(coords_frames, dtype=np.float32)
-        scores = np.asarray(scores_frames, dtype=np.float32)
-        label = 1 if str(item.get("label", "normal")).lower() == "suspicious" else 0
-        for window_coords, window_scores in _select_windows(coords, scores, sequence_length):
-            window_coords, window_scores = _normalize_sequence(window_coords, window_scores)
-            if window_coords.shape != (sequence_length, 17, 2) or window_scores.shape != (sequence_length, 17):
-                continue
-            source_name = f"{dataset_name_lower}:{source_file}:{int(window_coords.shape[0])}"
-            samples.append(Phase4Sample(coords=window_coords, scores=window_scores, label=label, source=source_name))
-
-    return samples
-
-
 def build_phase4_samples(config: Phase4DataConfig) -> List[Phase4Sample]:
     samples: List[Phase4Sample] = []
     
     # Load manual clips
     if config.manual_limit > 0:
-        samples.extend(_load_manual_samples(
+        manual_samples = _load_manual_samples(
             config.manual_manifest_path,
             config.manual_pkl_path,
             config.sequence_length,
             config.manual_limit
-        ))
+        )
+        # Dynamic class-balanced oversampling targeting 90 windows per class
+        normal_samples = [s for s in manual_samples if s.label == 0]
+        suspicious_samples = [s for s in manual_samples if s.label == 1]
+        
+        n_normal = len(normal_samples)
+        n_suspicious = len(suspicious_samples)
+        
+        target_windows = 180
+        oversampled_manual = []
+        
+        if n_normal > 0:
+            dup_factor_normal = max(1, target_windows // n_normal)
+            for sample in normal_samples:
+                for i in range(dup_factor_normal):
+                    oversampled_manual.append(
+                        Phase4Sample(
+                            coords=sample.coords.copy(),
+                            scores=sample.scores.copy(),
+                            label=sample.label,
+                            source=f"{sample.source}_dup{i}",
+                            clip_id=sample.clip_id,
+                        )
+                    )
+                    
+        if n_suspicious > 0:
+            dup_factor_suspicious = max(1, target_windows // n_suspicious)
+            for sample in suspicious_samples:
+                for i in range(dup_factor_suspicious):
+                    oversampled_manual.append(
+                        Phase4Sample(
+                            coords=sample.coords.copy(),
+                            scores=sample.scores.copy(),
+                            label=sample.label,
+                            source=f"{sample.source}_dup{i}",
+                            clip_id=sample.clip_id,
+                        )
+                    )
+        samples.extend(oversampled_manual)
 
     # Load RetailS clips using mask-aware disk loader
     staged_limit = config.retail_suspicious_limit // 2 if config.retail_suspicious_limit else None
@@ -370,8 +282,12 @@ class Phase4PoseDataset(Dataset):
             # Keep the augmentation conservative: the label should not change,
             # but the model sees slightly different spatial realizations.
             feats = KinematicFeatureExtractor().transform(augmented[np.newaxis, ...])[0]
+            
+            # Speed augmentation: multiply velocities (first 34 dims) by a random scale factor
+            speed_factor = rng.uniform(0.7, 1.3)
+            feats[:, :34] *= np.float32(speed_factor)
         else:
-            feats = self.feats[idx]
+            feats = self.feats[idx].copy()
 
         return {
             "poses": torch.from_numpy(feats),

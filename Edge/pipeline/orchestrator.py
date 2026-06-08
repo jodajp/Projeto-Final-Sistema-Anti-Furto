@@ -51,14 +51,13 @@ class AntiTheftOrchestrator:
 
         # Initialize spatial normalization
         spatial_cfg = config.data.get("spatial_normalization", {})
+        self.normalizer = SpatialNormalizer(config)
         if spatial_cfg.get("enabled", False):
             self.spatial_norm_enabled = True
-            self.normalizer = SpatialNormalizer(config)
             self.skeleton_viz = SkeletonVisualizer()
             self.show_normalized = True
         else:
             self.spatial_norm_enabled = False
-            self.normalizer = None
             self.skeleton_viz = None
             self.show_normalized = False
 
@@ -77,6 +76,11 @@ class AntiTheftOrchestrator:
         self.db = DatabaseHandler()
         # debug helper to print bbox/keypoint diagnostics once
         self._debug_bbox_printed = False
+
+        # Alert persistence fields
+        self.current_alert_text = None
+        self.current_alert_countdown = 0
+        self.alert_persist_frames = 45  # Keep alert on screen for 1.5 seconds (at 30fps)
         
         # Configuração de guarda de métricas
         self.metricas_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Metricas')
@@ -141,9 +145,9 @@ class AntiTheftOrchestrator:
         print(f"Backend: {self.detector_info.get('backend', 'N/A')}")
         print(f"Atividades carregadas: {len(self.activities)}")
         print(f"Handlers de alerta: {len(self.alert_dispatcher.handlers)}")
-        temporal_status = "✓ ATIVO" if self.temporal_filter.is_enabled() else "desativado"
+        temporal_status = "[OK] ATIVO" if self.temporal_filter.is_enabled() else "desativado"
         print(f"Filtro Temporal: {temporal_status}")
-        spatial_status = "✓ ATIVO" if self.spatial_norm_enabled else "desativado"
+        spatial_status = "[OK] ATIVO" if self.spatial_norm_enabled else "desativado"
         print(f"Normalização Espacial: {spatial_status}")
         print("Controles: Q = sair | D = debug | N = toggle normalizado | T = toggle temporal")
         print("=" * 60 + "\n")
@@ -367,12 +371,20 @@ class AntiTheftOrchestrator:
             if track_id is None or track_id == '...':
                 continue
 
+            # Pre-compute NormalizedPose for each entity right before processing activities
+            kpts_arr = np.asarray(ent['kpts'], dtype=np.float32)
+            scrs_arr = np.asarray(ent['scrs'], dtype=np.float32)
+            norm_pose = self.normalizer.normalize(kpts_arr, scrs_arr)
+            ent['norm_pose'] = norm_pose
+
             for activity in self.activities:
-                event = activity.detecta(ent['kpts'], ent['scrs'], self.metrics.frame_count, timestamp, track_id=track_id)
+                event = activity.detecta(norm_pose, self.metrics.frame_count, timestamp, track_id=track_id)
                 if event:
                     self.alert_dispatcher.dispatch(event)
                     alert_text = f"ALERTA: {event.tipo} ({event.confianca:.0%})"
                     self.db.salvar_alerta(track_id, event.tipo, event.confianca * 100)
+                    # Exibe no terminal para feedback imediato do utilizador
+                    print(f"\n>>> [ALERTA DETETADO] ID {track_id}: {event.tipo.upper()} ({event.confianca:.0%}) - {event.descricao}\n")
         return alert_text
 
     def _desenhar_caixas(self, frame, entidades):
@@ -516,9 +528,20 @@ class AntiTheftOrchestrator:
                 keypoints, scores = self.last_detection
 
                 entidades = []
-                alert_text = None
+                new_alert_text = None
                 if keypoints is not None and len(keypoints) > 0:
-                    entidades, alert_text = self._processar_frame(keypoints, scores, frame.shape, timestamp)
+                    entidades, new_alert_text = self._processar_frame(keypoints, scores, frame.shape, timestamp)
+
+                # Persistencia do texto do alerta no ecra
+                if new_alert_text:
+                    self.current_alert_text = new_alert_text
+                    self.current_alert_countdown = self.alert_persist_frames
+                elif self.current_alert_countdown > 0:
+                    self.current_alert_countdown -= 1
+                    if self.current_alert_countdown == 0:
+                        self.current_alert_text = None
+
+                alert_text = self.current_alert_text
 
                 # Render using processed entities so skeletons align with boxes/IDs
                 if entidades:
