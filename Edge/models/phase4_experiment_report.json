@@ -2,10 +2,10 @@
   "config": {
     "sequence_length": 45,
     "manual_count": -1,
-    "retail_normal_count": 150,
-    "retail_suspicious_count": 150,
+    "retail_normal_count": 250,
+    "retail_suspicious_count": 250,
     "batch_size": 8,
-    "epochs": 25,
+    "epochs": 15,
     "hidden_size": 128,
     "attention_size": 64,
     "learning_rate": 0.001,
@@ -18,43 +18,46 @@
     "loss": "focal",
     "focal_alpha": 0.25,
     "focal_gamma": 2.0,
-    "patience": 12
+    "patience": 15,
+    "dropout": 0.2,
+    "num_layers": 1,
+    "bidirectional": false
   },
   "sample_counts": {
-    "normal": 651,
-    "suspicious": 442,
-    "total": 1093
+    "normal": 951,
+    "suspicious": 581,
+    "total": 1532
   },
   "split_sizes": {
-    "train": 801,
-    "val": 146,
-    "test": 146
+    "train": 1071,
+    "val": 235,
+    "test": 226
   },
-  "threshold": 0.4649999999999999,
+  "threshold": 0.5449999999999999,
   "validation": {
-    "precision": 1.0,
+    "precision": 0.9375,
     "recall": 1.0,
-    "specificity": 1.0,
-    "f1": 1.0,
-    "hprs": 1.0,
-    "accuracy": 1.0,
+    "specificity": 0.9666666666666667,
+    "f1": 0.967741935483871,
+    "hprs": 0.9673832468495183,
+    "accuracy": 0.9777777777777777,
     "tp": 15.0,
-    "tn": 30.0,
-    "fp": 0.0,
+    "tn": 29.0,
+    "fp": 1.0,
     "fn": 0.0
   },
   "test": {
-    "threshold": 0.4649999999999999,
-    "precision": 0.53125,
-    "recall": 0.32075471698113206,
-    "specificity": 0.8387096774193549,
-    "f1": 0.4,
-    "hprs": 0.48447204968944096,
-    "accuracy": 0.6506849315068494,
-    "tp": 17.0,
-    "tn": 78.0,
-    "fp": 15.0,
-    "fn": 36.0
+    "precision": 0.625,
+    "recall": 0.14084507042253522,
+    "specificity": 0.9612903225806452,
+    "f1": 0.22988505747126436,
+    "hprs": 0.3079997243850341,
+    "accuracy": 0.7035398230088495,
+    "tp": 10.0,
+    "tn": 149.0,
+    "fp": 6.0,
+    "fn": 61.0,
+    "threshold": 0.5449999999999999
   },
   "save_path": "F:\\Github\\Projeto-Final-Sistema-Anti-Furto\\Edge\\models\\phase4_experiment_model.pth",
   "onnx_path": "F:\\Github\\Projeto-Final-Sistema-Anti-Furto\\Edge\\models\\phase4_experiment_model.onnx"

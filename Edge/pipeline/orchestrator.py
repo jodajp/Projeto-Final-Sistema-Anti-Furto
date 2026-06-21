@@ -267,7 +267,9 @@ class AntiTheftOrchestrator:
             if bbox is None:
                 continue
             entidades.append({'kpts': kpts.tolist(), 'scrs': scrs.tolist(), 'box': bbox, 'id': '...'})
-        return self._deduplicate_entities(entidades)
+        tracker_cfg = self.config.tracker()
+        dedup_thresh = float(tracker_cfg.get("dedup_thresh", 0.55))
+        return self._deduplicate_entities(entidades, iou_threshold=dedup_thresh)
 
     def _atribuir_ids(self, entidades):
         """Atribui IDs do ByteTrack às entidades usando IoU com as caixas rastreadas."""

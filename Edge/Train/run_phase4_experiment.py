@@ -332,6 +332,9 @@ def main() -> None:
     parser.add_argument("--focal-alpha", type=float, default=0.25, help="Focal Loss alpha parameter")
     parser.add_argument("--focal-gamma", type=float, default=2.0, help="Focal Loss gamma parameter")
     parser.add_argument("--patience", type=int, default=10, help="Early stopping patience")
+    parser.add_argument("--dropout", type=float, default=0.2, help="LSTM dropout rate")
+    parser.add_argument("--num-layers", type=int, default=1, help="Number of LSTM layers")
+    parser.add_argument("--bidirectional", action="store_true", help="Enable Bidirectional LSTM")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -400,7 +403,9 @@ def main() -> None:
         sequence_length=args.sequence_length,
         input_size=extractor.feature_dim(),
         hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
         attention_size=args.attention_size,
+        dropout=args.dropout,
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -408,6 +413,8 @@ def main() -> None:
         loss_type=args.loss,
         focal_alpha=args.focal_alpha,
         focal_gamma=args.focal_gamma,
+        bidirectional=args.bidirectional,
+        patience=args.patience,
     )
 
     model = Phase4Classifier(config)
@@ -434,6 +441,10 @@ def main() -> None:
             if epochs_no_improve >= patience:
                 print(f"[EARLY STOPPING] Triggered early stopping at epoch {epoch:02d} (best val loss: {best_val:.4f})")
                 break
+        
+        if epoch == config.epochs:
+            print(f"[INFO] Saving final epoch checkpoint to {save_path}")
+            trainer.save(str(save_path))
 
     print("[3/5] Loading best checkpoint...")
     best_model = Phase4Classifier(config)
@@ -512,6 +523,9 @@ def main() -> None:
             "focal_alpha": args.focal_alpha,
             "focal_gamma": args.focal_gamma,
             "patience": args.patience,
+            "dropout": args.dropout,
+            "num_layers": args.num_layers,
+            "bidirectional": args.bidirectional,
         },
         "sample_counts": {"normal": normal, "suspicious": suspicious, "total": len(samples)},
         "split_sizes": {"train": int(len(split.train_idx)), "val": int(len(split.val_idx)), "test": int(len(split.test_idx))},

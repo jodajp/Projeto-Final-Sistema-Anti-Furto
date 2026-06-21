@@ -36,6 +36,7 @@ from pipeline.spatial_normalizer import SpatialNormalizer, NormalizationParams
 from pipeline.skeleton_visualizer import SkeletonVisualizer
 from Train.phase4_model import Phase4Classifier
 from Train.phase4_types import Phase4Config
+from Detecao.skeleton import SKELETON_CONNECTIONS
 
 
 @dataclass
@@ -49,6 +50,7 @@ class InferenceFrame:
     mean_confidence: float
     normalized_keypoints: np.ndarray  # 17×2
     kinematic_features: np.ndarray  # 66
+    track_id: int = 0
 
 
 class Phase4Inference:
@@ -134,82 +136,173 @@ class Phase4Inference:
         self.visualizer = SkeletonVisualizer(canvas_size=500, show_labels=False, show_confidence=False)
         
         # Inference state
-        self.frame_buffer = deque(maxlen=45)  # Keep last 45 frames for sequence
-        self.prediction_history = deque(maxlen=45)  # For attention visualization
+        self.frame_buffers = {}  # track_id -> deque(maxlen=45)
+        self.prediction_histories = {}  # track_id -> deque(maxlen=45)
+        self.track_centroids = {}  # track_id -> centroid (x,y)
+        self.track_last_seen = {}  # track_id -> frame_idx
+        self.next_track_id = 1
         
-    def process_frame(self, frame: np.ndarray) -> InferenceFrame:
-        """Process single frame: detect pose, normalize, extract features."""
+    @staticmethod
+    def _box_iou(box_a, box_b):
+        x1 = max(box_a[0], box_b[0])
+        y1 = max(box_a[1], box_b[1])
+        x2 = min(box_a[2], box_b[2])
+        y2 = min(box_a[3], box_b[3])
+        inter_area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        area_a = max(0.0, box_a[2] - box_a[0]) * max(0.0, box_a[3] - box_a[1])
+        area_b = max(0.0, box_b[2] - box_b[0]) * max(0.0, box_b[3] - box_b[1])
+        union = area_a + area_b - inter_area
+        return inter_area / union if union > 0 else 0.0
+
+    @staticmethod
+    def _build_bbox(keypoints, scores, frame_shape):
+        h_img, w_img = frame_shape[:2]
+        in_bounds = (keypoints[:, 0] >= 0) & (keypoints[:, 0] < w_img) & \
+                    (keypoints[:, 1] >= 0) & (keypoints[:, 1] < h_img) & \
+                    np.isfinite(keypoints).all(axis=1)
+        
+        valid_mask = in_bounds & (scores > 0.2)
+        if np.sum(valid_mask) < 3:
+            valid_mask = in_bounds
+
+        if not np.any(valid_mask):
+            return None
+
+        valid_kpts = keypoints[valid_mask]
+        x_min, y_min = np.min(valid_kpts, axis=0)
+        x_max, y_max = np.max(valid_kpts, axis=0)
+
+        # Padding
+        pad_x = max(25.0, (x_max - x_min) * 0.12)
+        pad_y = max(35.0, (y_max - y_min) * 0.18)
+
+        x1 = int(np.clip(x_min - pad_x, 0, w_img - 1))
+        y1 = int(np.clip(y_min - pad_y, 0, h_img - 1))
+        x2 = int(np.clip(x_max + pad_x, 0, w_img - 1))
+        y2 = int(np.clip(y_max + pad_y, 0, h_img - 1))
+
+        return [x1, y1, x2, y2, float(np.mean(scores[valid_mask]))] if x2 > x1 and y2 > y1 else None
+
+    def process_frame(self, frame: np.ndarray, frame_idx: int) -> list[InferenceFrame]:
+        """Process single frame: detect poses, track people, normalize, buffer."""
         # Detect pose
         keypoints, scores = self.detector.detect(frame)
         
-        # Handle detector result format - extract best person if multiple
-        if keypoints is None or len(keypoints) == 0:
-            raw_keypoints = np.zeros((17, 2), dtype=np.float32)
-            raw_scores = np.zeros(17, dtype=np.float32)
-        else:
+        detected_poses = []
+        if keypoints is not None and len(keypoints) > 0:
             keypoints = np.asarray(keypoints, dtype=np.float32)
             scores = np.asarray(scores, dtype=np.float32)
+            if keypoints.ndim == 2:
+                keypoints = keypoints[np.newaxis, ...]
+                scores = scores[np.newaxis, ...]
             
-            # Handle batched results (multiple people)
-            if keypoints.ndim == 3:
-                # Multiple people detected - select best
-                person_conf = scores.mean(axis=1)
-                best_idx = int(np.argmax(person_conf))
-                raw_keypoints = keypoints[best_idx]
-                raw_scores = scores[best_idx]
+            for kpts, scs in zip(keypoints, scores):
+                kpts = kpts.reshape(17, 2)
+                scs = scs.reshape(17)
+                detected_poses.append((kpts, scs))
+        
+        # Deduplicate overlapping detections (IoU >= 0.55)
+        if len(detected_poses) >= 2:
+            poses_with_boxes = []
+            for kpts, scs in detected_poses:
+                bbox = self._build_bbox(kpts, scs, frame.shape)
+                if bbox is not None:
+                    poses_with_boxes.append((kpts, scs, bbox))
+            
+            poses_with_boxes = sorted(poses_with_boxes, key=lambda p: p[2][4], reverse=True)
+            deduped = []
+            for kpts, scs, bbox in poses_with_boxes:
+                is_duplicate = any(
+                    self._box_iou(bbox, kept[2]) >= 0.55
+                    for kept in deduped
+                )
+                if not is_duplicate:
+                    deduped.append((kpts, scs, bbox))
+            detected_poses = [(kpts, scs) for kpts, scs, _ in deduped]
+        
+        # Clean up dead tracks (not seen for more than 30 frames)
+        dead_tracks = [tid for tid, last_idx in self.track_last_seen.items() if frame_idx - last_idx > 30]
+        for tid in dead_tracks:
+            self.frame_buffers.pop(tid, None)
+            self.prediction_histories.pop(tid, None)
+            self.track_centroids.pop(tid, None)
+            self.track_last_seen.pop(tid, None)
+            
+        # Compute centroids for newly detected poses
+        centroids = []
+        for kpts, scs in detected_poses:
+            valid_kpts = kpts[scs > 0.1]
+            if len(valid_kpts) > 0:
+                centroids.append(valid_kpts.mean(axis=0))
             else:
-                raw_keypoints = keypoints
-                raw_scores = scores
-        
-        raw_keypoints = np.asarray(raw_keypoints, dtype=np.float32).reshape(17, 2)
-        raw_scores = np.asarray(raw_scores, dtype=np.float32).reshape(17)
-        
-        # Normalize
-        normalized_pose = self.normalizer.normalize(raw_keypoints, raw_scores)
-        normalized_keypoints = normalized_pose.keypoints
-        pose_valid = normalized_pose.is_valid
-        
-        # Compute metrics
-        torso_length = normalized_pose.torso_length
-        mean_confidence = np.mean(raw_scores)
-        
-        # Kinematic features will be computed when we have a full sequence
-        kinematic_features = np.zeros(50, dtype=np.float32)  # 50 dims (34 velocity + 16 limb orientation)
-        
-        inf_frame = InferenceFrame(
-            frame_idx=len(self.frame_buffer),
-            raw_frame=frame,
-            raw_keypoints=raw_keypoints,
-            raw_scores=raw_scores,
-            pose_valid=pose_valid,
-            torso_length=torso_length,
-            mean_confidence=mean_confidence,
-            normalized_keypoints=normalized_keypoints,
-            kinematic_features=kinematic_features,
-        )
-        
-        # Add to buffer (store normalized keypoints, raw scores for feature extraction)
-        self.frame_buffer.append((normalized_keypoints, raw_scores))
-        
-        return inf_frame
+                centroids.append(kpts.mean(axis=0))
+                
+        matched_indices = {}  # pose_idx -> track_id
+        if self.track_centroids and centroids:
+            track_ids = list(self.track_centroids.keys())
+            for p_idx, centroid in enumerate(centroids):
+                dists = [np.linalg.norm(centroid - self.track_centroids[tid]) for tid in track_ids]
+                min_idx = int(np.argmin(dists))
+                if dists[min_idx] < 150.0:  # distance threshold: 150 pixels
+                    matched_indices[p_idx] = track_ids[min_idx]
+                    
+        inf_frames = []
+        for p_idx, (kpts, scs) in enumerate(detected_poses):
+            if p_idx in matched_indices:
+                tid = matched_indices[p_idx]
+            else:
+                tid = self.next_track_id
+                self.next_track_id += 1
+                
+            self.track_centroids[tid] = centroids[p_idx]
+            self.track_last_seen[tid] = frame_idx
+            
+            self.frame_buffers.setdefault(tid, deque(maxlen=self.config.sequence_length))
+            self.prediction_histories.setdefault(tid, deque(maxlen=self.config.sequence_length))
+            
+            # Normalize pose
+            normalized_pose = self.normalizer.normalize(kpts, scs)
+            normalized_keypoints = normalized_pose.keypoints
+            pose_valid = normalized_pose.is_valid
+            torso_length = normalized_pose.torso_length
+            mean_confidence = np.mean(scs)
+            
+            inf_frame = InferenceFrame(
+                frame_idx=frame_idx,
+                raw_frame=frame,
+                raw_keypoints=kpts,
+                raw_scores=scs,
+                pose_valid=pose_valid,
+                torso_length=torso_length,
+                mean_confidence=mean_confidence,
+                normalized_keypoints=normalized_keypoints,
+                kinematic_features=np.zeros(50, dtype=np.float32),
+                track_id=tid
+            )
+            
+            self.frame_buffers[tid].append((normalized_keypoints, scs))
+            inf_frames.append(inf_frame)
+            
+        return inf_frames
     
     def predict(self, frame: InferenceFrame) -> tuple:
         """Predict shoplifting probability from sequence buffer."""
         import time
         t_start = time.perf_counter()
         
-        if len(self.frame_buffer) < self.config.sequence_length:
+        tid = getattr(frame, 'track_id', 0)
+        buffer = self.frame_buffers.get(tid, [])
+        if len(buffer) < self.config.sequence_length:
             # Not enough frames yet
             return None, None, None, None
         
         # Extract kinematic features for full sequence
-        # frame_buffer contains (normalized_keypoints, raw_scores) tuples
-        normalized_keypoints_list = np.array([kp for kp, _ in self.frame_buffer])  # (T, 17, 2)
+        normalized_keypoints_list = np.array([kp for kp, _ in buffer])  # (T, 17, 2)
         
         # Add batch dimension: (1, T, 17, 2)
         coords_batch = normalized_keypoints_list.astype(np.float32)[np.newaxis, :, :, :]
         
-        # Extract features: (1, T, 66)
+        # Extract features: (1, T, D)
         features_batch = self.feature_extractor.transform(coords_batch)
         
         if self.use_onnx:
@@ -220,7 +313,7 @@ class Phase4Inference:
             attn = ort_outs[1][0] if len(ort_outs) > 1 else np.ones(self.config.sequence_length) / self.config.sequence_length
         else:
             # Prepare tensor for model
-            features_tensor = torch.from_numpy(features_batch).float().to(self.device)  # (1, T, 66)
+            features_tensor = torch.from_numpy(features_batch).float().to(self.device)
             
             with torch.no_grad():
                 logits, attn_weights = self.model(features_tensor)
@@ -242,33 +335,79 @@ class Phase4Inference:
         }
 
         return logit, prob, attn, feature_stats
-    
-    def render_debug_overlay(self, frame: np.ndarray, inf_frame: InferenceFrame, 
-                             logit: float = None, prob: float = None, attn: np.ndarray = None,
-                             feature_stats: dict = None) -> np.ndarray:
-        """Add debugging overlay to frame."""
+
+    def render_debug_overlay(self, frame: np.ndarray, inf_frames: list[InferenceFrame], 
+                             track_predictions: dict) -> np.ndarray:
+        """Add debugging overlay to frame with multi-person tracking support."""
         overlay = frame.copy()
         h, w = overlay.shape[:2]
         
-        # Draw skeleton on normalized canvas
-        try:
-            skeleton_canvas = self.visualizer.render(
-                inf_frame.normalized_keypoints, 
-                inf_frame.raw_scores,
-                title=""
-            )
-        except Exception as e:
-            # Fallback if rendering fails
-            skeleton_canvas = np.zeros((500, 500, 3), dtype=np.uint8)
-        
-        # Composite skeleton canvas onto frame (top-right corner)
-        canvas_h, canvas_w = skeleton_canvas.shape[:2]
-        scale = min((w // 3) / canvas_w, (h // 3) / canvas_h)
-        resized_canvas = cv2.resize(skeleton_canvas, (int(canvas_w * scale), int(canvas_h * scale)))
-        resized_h, resized_w = resized_canvas.shape[:2]
-        x_offset = w - resized_w - 10
+        # Draw skeletons and bounding boxes directly on the overlay image
+        for inf_frame in inf_frames:
+            tid = inf_frame.track_id
+            preds = track_predictions.get(tid)
+            prob = preds[1] if preds else None
+            
+            # Determine color based on prediction
+            if prob is not None:
+                color = (0, 0, 255) if prob >= self.threshold else (0, 255, 0)
+            else:
+                color = (0, 165, 255) # Orange (buffering)
+                
+            # Compute bounding box
+            valid_kpts = inf_frame.raw_keypoints[inf_frame.raw_scores > 0.1]
+            if len(valid_kpts) > 0:
+                x_min = int(np.min(valid_kpts[:, 0]))
+                y_min = int(np.min(valid_kpts[:, 1]))
+                x_max = int(np.max(valid_kpts[:, 0]))
+                y_max = int(np.max(valid_kpts[:, 1]))
+                
+                # Expand box slightly
+                padding = 10
+                x_min = max(0, x_min - padding)
+                y_min = max(0, y_min - padding)
+                x_max = min(w - 1, x_max + padding)
+                y_max = min(h - 1, y_max + padding)
+                
+                # Draw bounding box
+                cv2.rectangle(overlay, (x_min, y_min), (x_max, y_max), color, 2)
+                
+                # Bounding box label
+                status_str = "Buffering..." if prob is None else f"{prob:.2f} ({'SUSPICIOUS' if prob >= self.threshold else 'NORMAL'})"
+                label = f"P{tid}: {status_str}"
+                cv2.putText(overlay, label, (x_min, max(15, y_min - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            # Draw skeleton connections on the original frame
+            for idx_from, idx_to in SKELETON_CONNECTIONS:
+                pt_from = inf_frame.raw_keypoints[idx_from]
+                pt_to = inf_frame.raw_keypoints[idx_to]
+                if inf_frame.raw_scores[idx_from] > 0.1 and inf_frame.raw_scores[idx_to] > 0.1:
+                    cv2.line(overlay, tuple(map(int, pt_from)), tuple(map(int, pt_to)), color, 2)
+            
+            # Draw keypoints on the original frame
+            for kpt, score in zip(inf_frame.raw_keypoints, inf_frame.raw_scores):
+                if score > 0.1:
+                    cv2.circle(overlay, tuple(map(int, kpt)), 4, (255, 255, 255), -1)
+                    
+        # Paste normalized skeletons side-by-side in the top-right corner
+        x_offset = w - 10
         y_offset = 10
-        overlay[y_offset:y_offset+resized_h, x_offset:x_offset+resized_w] = resized_canvas
+        for inf_frame in inf_frames:
+            tid = inf_frame.track_id
+            try:
+                skeleton_canvas = self.visualizer.render(
+                    inf_frame.normalized_keypoints, 
+                    inf_frame.raw_scores,
+                    title=f"P{tid} Normalized"
+                )
+            except Exception:
+                skeleton_canvas = np.zeros((500, 500, 3), dtype=np.uint8)
+            
+            resized = cv2.resize(skeleton_canvas, (110, 110))
+            r_h, r_w = resized.shape[:2]
+            if x_offset - r_w > 150: # Don't overlap too much with the center
+                overlay[y_offset:y_offset+r_h, x_offset-r_w:x_offset] = resized
+                x_offset -= (r_w + 10)
         
         # Draw debugging text (left side)
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -277,94 +416,65 @@ class Phase4Inference:
         line_height = 20
         x, y = 10, 20
         
-        # Pose validity
-        validity_text = "✓ VALID" if inf_frame.pose_valid else "✗ INVALID"
-        validity_color = (0, 255, 0) if inf_frame.pose_valid else (0, 0, 255)
-        cv2.putText(overlay, f"Pose: {validity_text}", (x, y), font, font_scale, validity_color, thickness)
-        y += line_height
-        
-        # Torso length
-        if inf_frame.torso_length > 0:
-            cv2.putText(overlay, f"Torso Length: {inf_frame.torso_length:.1f}px", (x, y), font, font_scale, (255, 255, 255), thickness)
-        y += line_height
-        
-        # Mean confidence
-        conf_color = (0, 255, 0) if inf_frame.mean_confidence > 0.5 else (0, 165, 255)
-        cv2.putText(overlay, f"Avg Confidence: {inf_frame.mean_confidence:.2f}", (x, y), font, font_scale, conf_color, thickness)
+        cv2.putText(overlay, "=== ACTIVE TRACKS ===", (x, y), font, font_scale, (255, 200, 0), thickness)
         y += int(line_height * 1.5)
         
-        # Model predictions
-        if prob is not None:
-            cv2.putText(overlay, "=== Model Prediction ===", (x, y), font, font_scale, (255, 200, 0), thickness)
-            y += line_height
-            
-            logit_text = f"Logit: {logit:.3f}"
-            cv2.putText(overlay, logit_text, (x, y), font, font_scale, (200, 200, 255), thickness)
-            y += line_height
-            
-            prob_color = (0, 0, 255) if prob > 0.5 else (0, 255, 0)
-            prob_text = f"P(Shoplifting): {prob:.3f}"
-            cv2.putText(overlay, prob_text, (x, y), font, font_scale, prob_color, thickness)
-            y += line_height
-            
-            # Confidence bar
-            bar_width = 150
-            bar_height = 15
-            bar_x, bar_y = x, y + 5
-            cv2.rectangle(overlay, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (100, 100, 100), -1)
-            filled_width = int(bar_width * prob)
-            bar_color = (0, 0, 255) if prob >= self.threshold else (0, 255, 0)
-            cv2.rectangle(overlay, (bar_x, bar_y), (bar_x + filled_width, bar_y + bar_height), bar_color, -1)
-            y += int(line_height * 1.5)
-
-            decision = "SHOPLIFTING" if prob >= self.threshold else "NORMAL"
-            decision_color = (0, 0, 255) if prob >= self.threshold else (0, 255, 0)
-            cv2.putText(overlay, f"Decision: {decision} @ thr={self.threshold:.2f}", (x, y), font, font_scale, decision_color, thickness)
-            y += line_height
-
-            # Model engine and latency details
-            engine_text = "Engine: ONNX Runtime" if self.use_onnx else "Engine: PyTorch"
-            engine_color = (0, 255, 255) if self.use_onnx else (255, 100, 255)
-            cv2.putText(overlay, engine_text, (x, y), font, font_scale, engine_color, thickness)
-            y += line_height
-
-            if feature_stats:
-                if "latency_ms" in feature_stats:
-                    cv2.putText(overlay, f"Inference Latency: {feature_stats['latency_ms']:.2f} ms", (x, y), font, font_scale, (100, 255, 100), thickness)
+        for inf_frame in inf_frames:
+            tid = inf_frame.track_id
+            preds = track_predictions.get(tid)
+            if preds and preds[1] is not None:
+                logit, prob, attn, feature_stats = preds
+                decision = "SHOPLIFTING" if prob >= self.threshold else "NORMAL"
+                decision_color = (0, 0, 255) if prob >= self.threshold else (0, 255, 0)
+                
+                track_text = f"P{tid}: {decision} (P={prob:.3f})"
+                cv2.putText(overlay, track_text, (x, y), font, font_scale, decision_color, thickness)
+                y += line_height
+                
+                # Small confidence bar
+                cv2.rectangle(overlay, (x, y), (x + 100, y + 8), (100, 100, 100), -1)
+                cv2.rectangle(overlay, (x, y), (x + int(100 * prob), y + 8), decision_color, -1)
+                y += int(line_height * 0.8)
+                
+                # Latency & Logit
+                if feature_stats and "latency_ms" in feature_stats:
+                    cv2.putText(overlay, f"  Latency: {feature_stats['latency_ms']:.1f}ms | Logit: {logit:.2f}", (x, y), font, font_scale * 0.7, (200, 200, 200), thickness)
                     y += line_height
-                cv2.putText(overlay, f"Feat |mean|: {feature_stats['feature_abs_mean']:.3f}", (x, y), font, font_scale, (220, 220, 220), thickness)
+            else:
+                buffer_len = len(self.frame_buffers.get(tid, []))
+                cv2.putText(overlay, f"P{tid}: Buffering ({buffer_len}/45)", (x, y), font, font_scale, (150, 150, 150), thickness)
                 y += line_height
-                cv2.putText(overlay, f"Feat std: {feature_stats['feature_std']:.3f}", (x, y), font, font_scale, (220, 220, 220), thickness)
-                y += line_height
-                cv2.putText(overlay, f"Feat delta: {feature_stats['feature_delta_mean']:.4f}", (x, y), font, font_scale, (220, 220, 220), thickness)
-                y += line_height
-                cv2.putText(overlay, f"Attn entropy: {feature_stats['attention_entropy']:.3f}", (x, y), font, font_scale, (220, 220, 220), thickness)
-                y += int(line_height * 1.2)
-        
-        # Frame counter & buffer status
-        buffer_status = f"Buffer: {len(self.frame_buffer)}/{self.config.sequence_length}"
-        cv2.putText(overlay, buffer_status, (x, y), font, font_scale, (200, 200, 200), thickness)
-        y += line_height
-        
+            y += 5
+            
         # Hotkey hints (bottom-left)
-        y_bottom = int(h - 100)
+        y_bottom = int(h - 30)
         cv2.putText(overlay, "SPACE: Play/Pause | LEFT/RIGHT: Step | S: Save | R: Reset | Q: Quit", 
                    (x, y_bottom), font, font_scale*0.7, (150, 150, 150), 1)
         
         return overlay
     
-    def run_interactive(self, video_path: str):
-        """Interactive inference loop."""
+    def run_inference(self, video_path: str, output_path: str = None):
+        """Run inference on video, either interactively or saving to output_path."""
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
         print(f"[INFERENCE] Video: {video_path}")
-        print(f"[INFERENCE] FPS: {fps}, Total frames: {total_frames}")
+        print(f"[INFERENCE] FPS: {fps}, Total frames: {total_frames}, Resolution: {width}x{height}")
         
-        playing = False
+        writer = None
+        if output_path:
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            writer = cv2.VideoWriter(output_path, fourcc, fps if fps > 0 else 30.0, (width, height))
+            print(f"[INFERENCE] Saving output to {output_path}...")
+            playing = True
+        else:
+            playing = False
+            
         current_frame_idx = 0
-        delay_ms = int(1000 / fps)
+        delay_ms = int(1000 / fps) if fps > 0 else 33
         
         # Create debug output directory
         debug_dir = Path("inference_debug_output")
@@ -378,53 +488,71 @@ class Phase4Inference:
                 print("[INFERENCE] End of video reached.")
                 break
             
-            # Process frame
-            inf_frame = self.process_frame(frame)
+            # Process frame: returns list of InferenceFrame
+            inf_frames = self.process_frame(frame, current_frame_idx)
             
-            # Predict
-            logit, prob, attn, feature_stats = self.predict(inf_frame)
+            # Predict for each active track
+            track_predictions = {}
+            for inf_frame in inf_frames:
+                tid = inf_frame.track_id
+                logit, prob, attn, feature_stats = self.predict(inf_frame)
+                track_predictions[tid] = (logit, prob, attn, feature_stats)
             
             # Render
-            display = self.render_debug_overlay(frame, inf_frame, logit, prob, attn, feature_stats)
+            display = self.render_debug_overlay(frame, inf_frames, track_predictions)
             
-            cv2.imshow("Phase 4 Inference", display)
-            
-            # Handle input
-            if playing:
-                key = cv2.waitKeyEx(delay_ms) & 0xFF
-            else:
-                key = cv2.waitKeyEx(0) & 0xFF
-            
-            if key == ord('q'):
-                break
-            elif key == ord(' '):  # SPACE
-                playing = not playing
-                print(f"[INFERENCE] {'Playing' if playing else 'Paused'} at frame {current_frame_idx}")
-            elif key == 82:  # RIGHT arrow (cv2 key code)
-                current_frame_idx = min(current_frame_idx + 1, total_frames - 1)
-                playing = False
-                print(f"[INFERENCE] Stepped forward to frame {current_frame_idx}")
-            elif key == 81:  # LEFT arrow
-                current_frame_idx = max(current_frame_idx - 1, 0)
-                playing = False
-                print(f"[INFERENCE] Stepped back to frame {current_frame_idx}")
-            elif key == ord('r'):  # R
-                current_frame_idx = 0
-                self.frame_buffer.clear()
-                playing = False
-                print("[INFERENCE] Reset to start")
-            elif key == ord('s'):  # S - Save debug frame
-                filename = debug_dir / f"frame_{current_frame_idx:04d}_prob_{prob if prob else 0:.3f}.png"
-                cv2.imwrite(str(filename), display)
-                print(f"[INFERENCE] Saved debug frame: {filename}")
-            elif playing:
+            if writer:
+                writer.write(display)
                 current_frame_idx += 1
-                if current_frame_idx >= total_frames:
+                if current_frame_idx % 50 == 0:
+                    print(f"[INFERENCE] Processed {current_frame_idx}/{total_frames} frames...")
+            else:
+                cv2.imshow("Phase 4 Inference", display)
+                
+                # Handle input
+                if playing:
+                    key = cv2.waitKeyEx(delay_ms) & 0xFF
+                else:
+                    key = cv2.waitKeyEx(0) & 0xFF
+                
+                if key == ord('q'):
+                    break
+                elif key == ord(' '):  # SPACE
+                    playing = not playing
+                    print(f"[INFERENCE] {'Playing' if playing else 'Paused'} at frame {current_frame_idx}")
+                elif key == 82:  # RIGHT arrow
+                    current_frame_idx = min(current_frame_idx + 1, total_frames - 1)
                     playing = False
-                    print("[INFERENCE] End of video, paused")
+                    print(f"[INFERENCE] Stepped forward to frame {current_frame_idx}")
+                elif key == 81:  # LEFT arrow
+                    current_frame_idx = max(current_frame_idx - 1, 0)
+                    playing = False
+                    print(f"[INFERENCE] Stepped back to frame {current_frame_idx}")
+                elif key == ord('r'):  # R
+                    current_frame_idx = 0
+                    self.frame_buffers.clear()
+                    self.prediction_histories.clear()
+                    self.track_centroids.clear()
+                    self.track_last_seen.clear()
+                    self.next_track_id = 1
+                    playing = False
+                    print("[INFERENCE] Reset to start")
+                elif key == ord('s'):  # S - Save debug frame
+                    probs_str = "_".join([f"P{tid}_{preds[1]:.2f}" for tid, preds in track_predictions.items() if preds[1] is not None])
+                    filename = debug_dir / f"frame_{current_frame_idx:04d}_{probs_str}.png"
+                    cv2.imwrite(str(filename), display)
+                    print(f"[INFERENCE] Saved debug frame: {filename}")
+                elif playing:
+                    current_frame_idx += 1
+                    if current_frame_idx >= total_frames:
+                        playing = False
+                        print("[INFERENCE] End of video, paused")
         
         cap.release()
-        cv2.destroyAllWindows()
+        if writer:
+            writer.release()
+        else:
+            cv2.destroyAllWindows()
         print("[INFERENCE] Done.")
 
 
@@ -483,6 +611,7 @@ def main():
     parser.add_argument("--threshold", type=float, default=0.5, help="Decision threshold for shoplifting")
     parser.add_argument("--threshold-file", type=str, default="models/phase4_experiment_report.json", help="Optional JSON report file containing a calibrated threshold")
     parser.add_argument("--device", type=str, default="cpu", help="Device (cpu or cuda)")
+    parser.add_argument("--output", type=str, help="Path to output video file (if specified, run offline and save results)")
     args = parser.parse_args()
 
     threshold = float(args.threshold)
@@ -526,7 +655,7 @@ def main():
         
         # Run inference on specified video
         inference = Phase4Inference(str(checkpoint_path), device=args.device, threshold=threshold, temperature=temperature)
-        inference.run_interactive(video_path)
+        inference.run_inference(video_path, output_path=args.output)
     else:
         # Interactive video selector
         shoplifting_dir = EDGE_DIR / "Visualizar_Data" / "Data" / "Shoplifting"
@@ -546,7 +675,7 @@ def main():
             
             print(f"\n[INFERENCE] Starting with video: {os.path.basename(video_path)}")
             inference = Phase4Inference(str(checkpoint_path), device=args.device, threshold=threshold, temperature=temperature)
-            inference.run_interactive(video_path)
+            inference.run_inference(video_path, output_path=args.output)
         else:
             # Multiple videos selected (generator)
             for video_path in video_selector:
@@ -556,7 +685,7 @@ def main():
                 
                 print(f"\n[INFERENCE] Starting with video: {os.path.basename(video_path)}")
                 inference = Phase4Inference(str(checkpoint_path), device=args.device, threshold=threshold, temperature=temperature)
-                inference.run_interactive(video_path)
+                inference.run_inference(video_path, output_path=args.output)
 
 
 if __name__ == "__main__":
