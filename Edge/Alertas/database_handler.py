@@ -46,6 +46,20 @@ class DatabaseHandler:
                 sincronizado INTEGER DEFAULT 0
             )
         """)
+
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS zone_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id INTEGER,
+                zone_id INTEGER,
+                zone_name TEXT,
+                hand TEXT,
+                x REAL,
+                y REAL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                sincronizado INTEGER DEFAULT 0
+            )
+        """)
         self.conn.commit()
 
         # Inicia o motor de sincronização
@@ -83,11 +97,23 @@ class DatabaseHandler:
                 metricas_data.get("average_inference_ms", 0.0),
                 metricas_data.get("success_rate", 0.0),
                 metricas_data.get("uptime_seconds", 0.0),
-                metricas_data.get("pessoas_detetadas", 0) # <--- O campo do teu colega
+                metricas_data.get("pessoas_detetadas", 0)
             ))
             self.conn.commit()
         except Exception as e:
             print(f"[Edge DB] Erro a guardar métrica local: {e}")
+
+    def salvar_evento_zona(self, track_id, zone_id, zone_name, hand, x, y, timestamp=None):
+        """Guarda um evento de zona do braço no Edge."""
+        try:
+            self.cursor.execute("""
+                INSERT INTO zone_events (
+                    track_id, zone_id, zone_name, hand, x, y, timestamp, sincronizado
+                ) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), 0)
+            """, (track_id, zone_id, zone_name, hand, x, y, timestamp))
+            self.conn.commit()
+        except Exception as e:
+            print(f"[Edge DB] Erro a guardar evento de zona local: {e}")
 
     # ================= SINCRONIZAÇÃO (CLOUD) =================
 

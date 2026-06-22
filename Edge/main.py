@@ -25,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-gpu", action="store_false", dest="gpu", help="Forca CPU no ONNX")
     parser.set_defaults(gpu=None)
     parser.add_argument("--debug", action="store_true", help="Ativa modo debug")
+    parser.add_argument("--zones", action="store_true", help="Ativa detecção de zonas de prateleira")
     return parser
 
 

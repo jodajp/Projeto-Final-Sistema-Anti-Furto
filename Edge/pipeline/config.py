@@ -75,6 +75,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "muted": [200, 200, 200],
         },
     },
+    "zone_tracking": {
+        "enabled": False,
+        "draw_zones": True,
+        "zones": [],
+    },
     "tracker": {
         "track_thresh": 0.35,
         "track_buffer": 90,
@@ -198,6 +203,10 @@ class AppConfig:
         if getattr(args, "debug", False):
             self.data["runtime"]["debug"] = True
 
+        if getattr(args, "zones", False):
+            zone_cfg = self.data.setdefault("zone_tracking", {})
+            zone_cfg["enabled"] = True
+        
         self._validate(self.data)
 
     def camera(self) -> Dict[str, Any]:
