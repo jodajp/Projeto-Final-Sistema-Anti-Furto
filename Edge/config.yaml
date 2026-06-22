@@ -76,26 +76,26 @@ visualization:
 zone_tracking:
   enabled: false
   draw_zones: true
+  grab_detection_enabled: true
+  min_hold_frames: 12
+  max_hand_speed: 4.0
+  max_relative_hand_speed: 3.0
   zones:
     - id: 1
       name: Zona 1
-      rect: [20, 20, 280, 140]
+      rect: [200, 0, 480, 80]
       color: [192, 224, 255]
     - id: 2
       name: Zona 2
-      rect: [20, 150, 280, 270]
+      rect: [200, 100, 480, 150]
       color: [255, 240, 180]
     - id: 3
       name: Zona 3
-      rect: [20, 280, 280, 400]
+      rect: [200, 160, 480, 210]
       color: [200, 255, 200]
     - id: 4
       name: Zona 4
-      rect: [320, 20, 620, 180]
-      color: [200, 220, 255]
-    - id: 5
-      name: Zona 5
-      rect: [320, 200, 620, 420]
+      rect: [200, 220, 480, 270]
       color: [255, 200, 200]
 
 tracker:

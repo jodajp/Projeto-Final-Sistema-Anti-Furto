@@ -9,6 +9,7 @@ from pathlib import Path
 from Alertas.database_handler import DatabaseHandler
 from bytetracker import BYTETracker
 from Edge.Detecao.detector_factory import create_detector
+from Edge.Detecao.skeleton import LEFT_WRIST, RIGHT_WRIST, LEFT_HIP, RIGHT_HIP
 from .plugins import load_activities, load_alert_handlers
 from .metrics import PipelineMetrics
 from .renderer import PoseRenderer
@@ -99,6 +100,28 @@ class AntiTheftOrchestrator:
         self.frame_web_intervalo = 10
         self.ultimo_frame_web = 0
         self.frame_web_path = os.path.join(self.metricas_dir, 'last_frame.jpg')
+
+        # Configuração de zonas de prateleira
+        zone_cfg = self.config.data.get('zone_tracking', {})
+        self.zones = zone_cfg.get('zones', [])
+        self.zone_tracking_enabled = bool(zone_cfg.get('enabled', False))
+        self.draw_zones_enabled = bool(zone_cfg.get('draw_zones', True))
+        self.track_hand_last_zone = {}
+
+        # Configuração de detecção de pegada em zonas
+        self.zone_grab_detection = bool(zone_cfg.get('grab_detection_enabled', True))
+        self.zone_grab_min_frames = int(zone_cfg.get('min_hold_frames', 12))
+        self.zone_grab_max_speed = float(zone_cfg.get('max_hand_speed', 4.0))
+        self.zone_grab_max_relative_speed = float(zone_cfg.get('max_relative_hand_speed', 3.0))
+        self.track_zone_hold_frames = {}
+        self.track_hand_last_pos = {}
+        self.track_body_last_pos = {}
+
+        # Configuração de saída
+        camera_cfg = config.camera()
+        self.output_width = int(camera_cfg.get('width', 640))
+        self.output_height = int(camera_cfg.get('height', 480))
+        self.output_size = (self.output_width, self.output_height)
 
     @staticmethod
     def _resolve_node_id() -> str:
@@ -230,6 +253,125 @@ class AntiTheftOrchestrator:
 
         return [x1, y1, x2, y2, float(np.mean(scores[valid_mask])), 0.0] if x2 > x1 and y2 > y1 else None
 
+    def _draw_zones(self, frame):
+        if not self.draw_zones_enabled or not self.zone_tracking_enabled or not self.zones:
+            return
+
+        overlay = frame.copy()
+        for zone in self.zones:
+            rect = zone.get('rect')
+            if not rect or len(rect) != 4:
+                continue
+            x1, y1, x2, y2 = map(int, rect)
+            color = tuple(int(c) for c in zone.get('color', [0, 255, 255]))
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+            cv2.putText(overlay, zone.get('name', f"Zona {zone.get('id', '?')}"),
+                        (x1 + 8, y1 + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+        alpha = 0.10
+        cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+
+        for zone in self.zones:
+            rect = zone.get('rect')
+            if not rect or len(rect) != 4:
+                continue
+            x1, y1, x2, y2 = map(int, rect)
+            border_color = tuple(min(255, int(c * 1.2)) for c in zone.get('color', [0, 255, 255]))
+            cv2.rectangle(frame, (x1, y1), (x2, y2), border_color, 2)
+
+    def _get_zone_for_point(self, x, y):
+        for zone in self.zones:
+            rect = zone.get('rect')
+            if not rect or len(rect) != 4:
+                continue
+            x1, y1, x2, y2 = map(int, rect)
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                return zone
+        return None
+
+    def _compute_body_center(self, kpts, scrs):
+        candidates = []
+        if scrs.shape[0] > LEFT_HIP and scrs[LEFT_HIP] >= 0.35:
+            candidates.append(kpts[LEFT_HIP])
+        if scrs.shape[0] > RIGHT_HIP and scrs[RIGHT_HIP] >= 0.35:
+            candidates.append(kpts[RIGHT_HIP])
+        if not candidates:
+            return None
+        return np.mean(candidates, axis=0)
+
+    def _check_hand_zone(self, ent, track_id, timestamp):
+        kpts = np.asarray(ent['kpts'], dtype=np.float32)
+        scrs = np.asarray(ent['scrs'], dtype=np.float32)
+        if kpts.size == 0 or scrs.size == 0:
+            return
+
+        hands = []
+        if scrs.shape[0] > LEFT_WRIST and scrs[LEFT_WRIST] >= 0.35:
+            hands.append(('left', tuple(kpts[LEFT_WRIST].tolist())))
+        if scrs.shape[0] > RIGHT_WRIST and scrs[RIGHT_WRIST] >= 0.35:
+            hands.append(('right', tuple(kpts[RIGHT_WRIST].tolist())))
+
+        body_center = self._compute_body_center(kpts, scrs)
+        body_prev = self.track_body_last_pos.get(track_id)
+        body_speed = 0.0
+        if body_center is not None:
+            if body_prev is not None:
+                body_speed = np.linalg.norm(body_center - body_prev)
+            self.track_body_last_pos[track_id] = body_center
+
+        for hand_name, (x, y) in hands:
+            zone = self._get_zone_for_point(x, y)
+            zone_id = zone['id'] if zone else None
+            previous_zone = self.track_hand_last_zone.get((track_id, hand_name))
+
+            if zone_id != previous_zone:
+                self.track_hand_last_zone[(track_id, hand_name)] = zone_id
+                self.track_zone_hold_frames.pop((track_id, hand_name, previous_zone), None)
+                self.track_hand_last_pos[(track_id, hand_name)] = np.array([x, y], dtype=np.float32)
+                if zone:
+                    print(f"[ZONE] ID {track_id} ({hand_name}) em {zone['name']} x={x:.1f}, y={y:.1f}")
+
+            if zone:
+                current_pos = np.array([x, y], dtype=np.float32)
+                prev_pos = self.track_hand_last_pos.get((track_id, hand_name))
+                speed = np.linalg.norm(current_pos - prev_pos) if prev_pos is not None else 0.0
+                self.track_hand_last_pos[(track_id, hand_name)] = current_pos
+                relative_speed = speed
+                if body_center is not None:
+                    relative_speed = max(0.0, speed - body_speed)
+
+                hold_key = (track_id, hand_name, zone_id)
+                if (relative_speed <= self.zone_grab_max_relative_speed and
+                        speed <= self.zone_grab_max_speed):
+                    self.track_zone_hold_frames[hold_key] = self.track_zone_hold_frames.get(hold_key, 0) + 1
+                else:
+                    self.track_zone_hold_frames[hold_key] = 1
+
+                hold_frames = self.track_zone_hold_frames[hold_key]
+                grab_detected = (self.zone_grab_detection and
+                                 hold_frames >= self.zone_grab_min_frames)
+                if grab_detected and hold_frames == self.zone_grab_min_frames:
+                    print(f"[GRAB] ID {track_id} ({hand_name}) possivel pegou algo em {zone['name']} ({hold_frames} frames estáveis, rel_speed={relative_speed:.2f})")
+
+                ent.setdefault('hand_zones', []).append({
+                    'hand': hand_name,
+                    'zone_id': zone_id,
+                    'zone_name': zone['name'],
+                    'point': (x, y),
+                    'zone_hold_frames': int(hold_frames),
+                    'grab_candidate': grab_detected,
+                })
+
+    def _processar_zonas(self, entidades, timestamp):
+        if not self.zone_tracking_enabled or not self.zones:
+            return
+
+        for ent in entidades:
+            track_id = ent.get('id')
+            if track_id is None or track_id == '...':
+                continue
+            self._check_hand_zone(ent, track_id, timestamp)
+
     def _deduplicate_entities(self, entidades, iou_threshold=0.85):
         if len(entidades) < 2:
             return entidades
@@ -360,6 +502,7 @@ class AntiTheftOrchestrator:
                 ent['kpts'] = filt_kpts.tolist()
                 ent['scrs'] = filt_scrs.tolist()
 
+        self._processar_zonas(entidades, timestamp)
         alert_text = self._processar_atividades(entidades, timestamp)
         return entidades, alert_text
 
@@ -405,6 +548,11 @@ class AntiTheftOrchestrator:
 
                 if self.metrics.frame_count == 0:
                     print(f"[VIDEO] Resolucao Real: {frame.shape[1]}x{frame.shape[0]}")
+                    if (frame.shape[1], frame.shape[0]) != self.output_size:
+                        print(f"[VIDEO] Forçando resolução de exibição para {self.output_width}x{self.output_height}")
+
+                if (frame.shape[1], frame.shape[0]) != self.output_size:
+                    frame = cv2.resize(frame, self.output_size, interpolation=cv2.INTER_LINEAR)
 
                 self.metrics.on_frame()
                 timestamp = time.time()
@@ -444,6 +592,7 @@ class AntiTheftOrchestrator:
                 render_scrs = [ent['scrs'] for ent in entidades] if entidades else scores
 
                 output = self.renderer.render(frame, render_kpts, render_scrs)
+                self._draw_zones(output)
                 self._desenhar_caixas(output, entidades)
                 self.renderer.draw_overlay(output, self._build_info_lines(should_infer),
                                            alert_text=self.current_alert_text, debug=self.debug)
