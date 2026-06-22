@@ -18,7 +18,13 @@ Performance: <0.08ms per frame (fully vectorized NumPy, negligible overhead)
 
 from typing import Any, Optional, Tuple
 import numpy as np
-
+from Detecao.skeleton import (
+    NOSE, LEFT_EYE, RIGHT_EYE, LEFT_EAR, RIGHT_EAR,
+    LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_ELBOW, RIGHT_ELBOW,
+    LEFT_WRIST, RIGHT_WRIST, LEFT_HIP, RIGHT_HIP,
+    LEFT_KNEE, RIGHT_KNEE, LEFT_ANKLE, RIGHT_ANKLE,
+    DEFAULT_LIMBS
+)
 
 class AdaptiveFilterState:
     """Adaptive temporal filter state with skeletal constraint tracking."""
@@ -54,30 +60,21 @@ class TemporalPoseFilter:
     """
 
     # COCO keypoint indices
-    LIMB_PAIRS = [
-        (5, 7),    # left_shoulder -> left_elbow
-        (6, 8),    # right_shoulder -> right_elbow
-        (7, 9),    # left_elbow -> left_wrist
-        (8, 10),   # right_elbow -> right_wrist
-        (11, 13),  # left_hip -> left_knee
-        (12, 14),  # right_hip -> right_knee
-        (13, 15),  # left_knee -> left_ankle
-        (14, 16),  # right_knee -> right_ankle
-    ]
+    LIMB_PAIRS = DEFAULT_LIMBS
 
     # Kinematic chain (parent -> children) for confidence propagation
     SKELETON_TREE = {
-        5: [7, 11],    # left_shoulder -> [left_elbow, left_hip]
-        6: [8, 12],    # right_shoulder -> [right_elbow, right_hip]
-        7: [9],        # left_elbow -> [left_wrist]
-        8: [10],       # right_elbow -> [right_wrist]
-        11: [13],      # left_hip -> [left_knee]
-        12: [14],      # right_hip -> [right_knee]
-        13: [15],      # left_knee -> [left_ankle]
-        14: [16],      # right_knee -> [right_ankle]
+        LEFT_SHOULDER: [LEFT_ELBOW, LEFT_HIP],
+        RIGHT_SHOULDER: [RIGHT_ELBOW, RIGHT_HIP],
+        LEFT_ELBOW: [LEFT_WRIST],
+        RIGHT_ELBOW: [RIGHT_WRIST],
+        LEFT_HIP: [LEFT_KNEE],
+        RIGHT_HIP: [RIGHT_KNEE],
+        LEFT_KNEE: [LEFT_ANKLE],
+        RIGHT_KNEE: [RIGHT_ANKLE],
     }
 
-    HEAD_KEYPOINTS = (0, 1, 2, 3, 4)
+    HEAD_KEYPOINTS = (NOSE, LEFT_EYE, RIGHT_EYE, LEFT_EAR, RIGHT_EAR)
 
     def __init__(self, config_source):
         raw_config: dict[str, Any] = {}
@@ -112,6 +109,7 @@ class TemporalPoseFilter:
             raw_config.get("head_rapid_movement_threshold", self.rapid_movement_threshold)
         )
         self.last_constraint_violation_count = 0
+        self.limb_pairs_arr = np.asarray(self.LIMB_PAIRS)
 
         self.state: Optional[AdaptiveFilterState] = None
 
@@ -123,11 +121,8 @@ class TemporalPoseFilter:
 
     def _compute_limb_lengths(self, keypoints: np.ndarray) -> np.ndarray:
         """Compute all limb lengths. Shape (num_limbs,)."""
-        lengths = []
-        for parent, child in self.LIMB_PAIRS:
-            length = np.linalg.norm(keypoints[child] - keypoints[parent])
-            lengths.append(length)
-        return np.array(lengths)
+        diffs = keypoints[self.limb_pairs_arr[:, 1]] - keypoints[self.limb_pairs_arr[:, 0]]
+        return np.linalg.norm(diffs, axis=1)
 
     def _check_limb_stretching(self, keypoints: np.ndarray) -> np.ndarray:
         """
@@ -140,14 +135,11 @@ class TemporalPoseFilter:
         current_lengths = self._compute_limb_lengths(keypoints)
         stretch_ratios = current_lengths / (self.state.baseline_limb_lengths + 1e-8)
 
-        # Flag limbs that are stretching too much
         anomalous_limbs = stretch_ratios > self.limb_stretch_threshold
         affected_keypoints = np.zeros(17, dtype=bool)
-
-        for i, (parent, child) in enumerate(self.LIMB_PAIRS):
-            if anomalous_limbs[i]:
-                affected_keypoints[parent] = True
-                affected_keypoints[child] = True
+        if np.any(anomalous_limbs):
+            bad_indices = self.limb_pairs_arr[anomalous_limbs].flatten()
+            affected_keypoints[bad_indices] = True
 
         return affected_keypoints
 

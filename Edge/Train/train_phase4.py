@@ -26,6 +26,7 @@ class Trainer:
             )
         else:
             self.loss_fn = ConfidenceWeightedBCELoss()
+        self.crucial = torch.tensor(self.CRUCIAL_JOINTS, dtype=torch.long, device=self.device)
 
     def train_epoch(self, dataloader: DataLoader) -> float:
         self.model.train()
@@ -39,9 +40,7 @@ class Trainer:
             logits, _ = self.model(poses)
 
             # compute sample-level raw weight w_raw as mean confidence over crucial joints
-            # confidences: (B, T, K)
-            crucial = torch.tensor(self.CRUCIAL_JOINTS, dtype=torch.long, device=self.device)
-            w_raw = confidences.index_select(dim=2, index=crucial).mean(dim=(1, 2))  # (B,)
+            w_raw = confidences.index_select(dim=2, index=self.crucial).mean(dim=(1, 2))  # (B,)
 
             loss = self.loss_fn(logits, labels, w_raw)
 
@@ -66,8 +65,7 @@ class Trainer:
             labels = batch["labels"].to(self.device)
 
             logits, _ = self.model(poses)
-            crucial = torch.tensor(self.CRUCIAL_JOINTS, dtype=torch.long, device=self.device)
-            w_raw = confidences.index_select(dim=2, index=crucial).mean(dim=(1, 2))
+            w_raw = confidences.index_select(dim=2, index=self.crucial).mean(dim=(1, 2))
             loss = self.loss_fn(logits, labels, w_raw)
 
             total_loss += float(loss.detach().cpu().item())

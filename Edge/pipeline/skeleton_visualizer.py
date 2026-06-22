@@ -10,7 +10,6 @@ Designed for real-time sanity checking of translation and scale invariance.
 from typing import Optional, Tuple
 import numpy as np
 import cv2
-from rich import print as rprint
 
 
 from Detecao.skeleton import (
@@ -238,124 +237,25 @@ class SkeletonVisualizer:
         Returns:
             Pixel coordinates, shape (N, 2), clamped to canvas bounds
         """
-        # Find bounds of skeleton
         valid_mask = ~np.isnan(norm_coords).any(axis=1)
-        
         if not valid_mask.any():
-            # No valid points, return NaNs
             return np.full_like(norm_coords, np.nan)
         
         valid_coords = norm_coords[valid_mask]
-        
         x_min, x_max = valid_coords[:, 0].min(), valid_coords[:, 0].max()
         y_min, y_max = valid_coords[:, 1].min(), valid_coords[:, 1].max()
         
-        # Handle degenerate cases
         if x_min == x_max:
-            x_min -= 0.5
-            x_max += 0.5
+            x_min, x_max = x_min - 0.5, x_max + 0.5
         if y_min == y_max:
-            y_min -= 0.5
-            y_max += 0.5
+            y_min, y_max = y_min - 0.5, y_max + 0.5
         
-        width = x_max - x_min
-        height = y_max - y_min
+        scale = (self.canvas_size - 2 * self.margin_px) / max(x_max - x_min, y_max - y_min)
         
-        # Apply margin and fit to canvas
-        available_size = self.canvas_size - 2 * self.margin_px
-        scale = available_size / max(width, height)
-        
-        # Transform: normalize -> pixel space
         px_coords = np.empty_like(norm_coords)
-        
-        # X: shift to positive, scale, add offset
         px_coords[:, 0] = (norm_coords[:, 0] - x_min) * scale + self.margin_px
-        
-        # Y: flip (image coords have Y increasing downward)
-        # and shift to positive, scale, add offset
         px_coords[:, 1] = (norm_coords[:, 1] - y_min) * scale + self.margin_px
         
-        # Clamp to canvas bounds
-        px_coords = np.clip(
-            px_coords,
-            0,
-            self.canvas_size - 1,
-        )
-        
-        # Restore NaN for invalid points
+        px_coords = np.clip(px_coords, 0, self.canvas_size - 1)
         px_coords[~valid_mask] = np.nan
-        
         return px_coords
-    
-    @staticmethod
-    def compare_original_vs_normalized(
-        original_keypoints: np.ndarray,
-        original_scores: np.ndarray,
-        normalized_keypoints: np.ndarray,
-        canvas_size: int = 500,
-    ) -> np.ndarray:
-        """
-        Render side-by-side comparison of original and normalized skeletons.
-        
-        Args:
-            original_keypoints: Shape (17, 2), raw pixel coords
-            original_scores: Shape (17,), confidence scores
-            normalized_keypoints: Shape (17, 2), normalized coords
-            canvas_size: Size of each canvas
-        
-        Returns:
-            Composite image [original | normalized], shape (canvas_size, 2*canvas_size, 3)
-        """
-        viz = SkeletonVisualizer(canvas_size=canvas_size)
-        
-        # Render original (need to normalize coordinates for display)
-        canvas_orig = viz.render(
-            original_keypoints,
-            original_scores,
-            title="Original (Raw Pixels)",
-        )
-        
-        # Render normalized
-        canvas_norm = viz.render(
-            normalized_keypoints,
-            original_scores,
-            title="Normalized (Torso-Relative)",
-        )
-        
-        # Concatenate horizontally
-        composite = np.hstack([canvas_orig, canvas_norm])
-        
-        return composite
-
-
-def visualize_normalized_pose(
-    normalized_keypoints: np.ndarray,
-    scores: Optional[np.ndarray] = None,
-    window_name: str = "Normalized Skeleton",
-    canvas_size: int = 500,
-    display_time_ms: int = 0,
-) -> Optional[np.ndarray]:
-    """
-    Quick utility to display normalized skeleton in a window.
-    
-    Args:
-        normalized_keypoints: Shape (17, 2)
-        scores: Shape (17,), optional
-        window_name: OpenCV window name
-        canvas_size: Canvas size in pixels
-        display_time_ms: Time to display (0 = wait for key press)
-    
-    Returns:
-        The rendered canvas (uint8 BGR image)
-    """
-    viz = SkeletonVisualizer(canvas_size=canvas_size)
-    canvas = viz.render(
-        normalized_keypoints,
-        scores,
-        title=window_name,
-    )
-    
-    cv2.imshow(window_name, canvas)
-    cv2.waitKey(display_time_ms)
-    
-    return canvas

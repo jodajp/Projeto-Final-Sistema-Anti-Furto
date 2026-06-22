@@ -12,6 +12,11 @@
         Dashboard
       </button>
       <button 
+        :class="['nav-btn', { active: currentView === 'estatisticas' }]" 
+        @click="$emit('navigate', 'estatisticas')">
+        Estatísticas
+      </button>
+      <button 
         :class="['nav-btn', { active: currentView === 'alertas' }]" 
         @click="$emit('navigate', 'alertas')">
         Histórico de Alertas

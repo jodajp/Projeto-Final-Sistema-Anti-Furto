@@ -4,7 +4,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from pathlib import Path
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from app.database import engine_master, Base, get_db_master, get_db_replica
 from app.models.metrica import MetricaNodeModel
 from app.models.alerta import AlertaModel
 from app.schemas.metrica import MetricaNodeCreate, MetricasClusterResponse, ClusterMetricsSummary
+from app.metrics_helpers import build_metrics_by_day
 
 # Garante que as tabelas são criadas na base de dados principal (Master)
 Base.metadata.create_all(bind=engine_master)
@@ -85,8 +86,13 @@ def reset_database(db: Session = Depends(get_db_master)):
 @app.post("/api/metricas/registar")
 def register_metrics(metrica: MetricaNodeCreate, db: Session = Depends(get_db_master)):
     try:
-        # A API recebe um Pydantic Model e converte-o para o SQLAlchemy Model
-        nova_metrica = MetricaNodeModel(**metrica.dict())
+        # Converte o timestamp numérico para datetime, se necessário.
+        metric_dict = metrica.dict()
+        ts = metric_dict.get("timestamp")
+        if isinstance(ts, (int, float)):
+            metric_dict["timestamp"] = datetime.fromtimestamp(ts)
+
+        nova_metrica = MetricaNodeModel(**metric_dict)
         db.add(nova_metrica)
         db.commit()
         # Nota: O retorno tem de incluir "ficheiro" para o Teste 7 passar a verde
@@ -167,6 +173,22 @@ def get_metrics_history(node_id: Optional[str] = None, limite: int = 50, db: Ses
         query = query.filter(MetricaNodeModel.node_id == node_id)
     historico = query.order_by(MetricaNodeModel.id.desc()).limit(min(limite, 100)).all()
     return {"historico": historico, "total": len(historico), "timestamp": datetime.now().isoformat()}
+
+@app.get("/api/metricas/historico/sem_limit")
+def get_metrics_history_no_limit(node_id: Optional[str] = None, db: Session = Depends(get_db_replica)):
+    query = db.query(MetricaNodeModel)
+    if node_id:
+        query = query.filter(MetricaNodeModel.node_id == node_id)
+    historico = query.order_by(MetricaNodeModel.id.desc()).all()
+    return {"historico": historico, "total": len(historico), "timestamp": datetime.now().isoformat()}
+
+@app.get("/api/estatisticas/horas")
+def get_metrics_by_day(day: Optional[str] = None, db: Session = Depends(get_db_replica)):
+    return build_metrics_by_day(day, db)
+
+@app.get("/api/estatisticas/horas/{day}")
+def get_metrics_by_day_path(day: str, db: Session = Depends(get_db_replica)):
+    return build_metrics_by_day(day, db)
 
 # ============ ENDPOINTS DE VÍDEO ============
 @app.get("/api/video/frame")
