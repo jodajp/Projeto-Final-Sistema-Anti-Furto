@@ -1,90 +1,93 @@
 """
 Detector de Velocidade Anormal
-Detecta movimentos muito rápidos (típicos de roubos)
+Detecta movimentos muito rápidos (típicos de roubos) com normalização de escala.
 """
 
-from typing import List, Optional, Dict
-from .base_activity import BaseActivity, SuspiciousEvent
+from typing import Optional
 import numpy as np
 
+from .base_activity import BaseActivity, SuspiciousEvent
+from pipeline.spatial_normalizer import NormalizedPose
+
+
 class VelocityDetector(BaseActivity):
-    """Detecta velocidade de movimento anormal."""
-    
-    def __init__(self, velocidade_maxima: float = 200.0):
+    """Detecta velocidade de movimento anormal com independência de escala."""
+
+    def __init__(self, velocidade_maxima: float = 200.0, cooldown_frames: int = 60):
         super().__init__("velocidade", threshold=0.6)
         self.velocidade_maxima = velocidade_maxima
-        
-        # Histórico de última posição
-        self.ultima_posicao = None
-        self.ultimo_frame_id = None
-        
-    def detecta(self, 
-                keypoints: List[tuple], 
-                scores: List[float],
+        self.cooldown_frames = cooldown_frames
+
+        # Histórico indexado por track_id
+        self.ultima_posicao = {}            # track_id -> pelvis (x, y)
+        self.ultimo_frame_id = {}           # track_id -> frame_id
+        self.frames_since_last_alerts = {}  # track_id -> int
+
+    def limpa_tracks_inativas(self, ids_presentes: set):
+        """Limpa o histórico de tracks inativas para evitar vazamento de memória."""
+        for track_id in list(self.ultima_posicao.keys()):
+            if track_id not in ids_presentes:
+                self.ultima_posicao.pop(track_id, None)
+                self.ultimo_frame_id.pop(track_id, None)
+                self.frames_since_last_alerts.pop(track_id, None)
+
+    def detecta(self,
+                norm_pose: NormalizedPose,
                 frame_id: int,
-                timestamp: float) -> Optional[SuspiciousEvent]:
-        """
-        Detecta velocidade anormal.
-        
-        Calcula a distância do centroide entre frames sucessivos
-        e compara com o threshold.
-        """
-        
-        if not keypoints or len(keypoints) == 0:
+                timestamp: float,
+                track_id: Optional[int] = None) -> Optional[SuspiciousEvent]:
+        tid = 0 if track_id is None else track_id
+
+        if tid not in self.frames_since_last_alerts:
+            self.frames_since_last_alerts[tid] = self.cooldown_frames
+
+        self.frames_since_last_alerts[tid] += 1
+
+        if not norm_pose or not norm_pose.is_valid:
             return None
-        
-        # Calcula centroide apenas com keypoints confiáveis
-        pontos_validos = []
-        for i, (x, y) in enumerate(keypoints):
-            if i < len(scores) and scores[i] > 0.3:
-                pontos_validos.append((x, y))
-        
-        if not pontos_validos:
-            self.ultima_posicao = None
+
+        pelvis_atual = norm_pose.pelvis
+        torso_length = norm_pose.torso_length
+
+        if torso_length <= 0:
             return None
-        
-        # Centroide atual
-        centroide_atual = (
-            np.mean([p[0] for p in pontos_validos]),
-            np.mean([p[1] for p in pontos_validos])
-        )
-        
-        # Se é primeira vez, apenas guarda posição
-        if self.ultima_posicao is None:
-            self.ultima_posicao = centroide_atual
-            self.ultimo_frame_id = frame_id
+
+        # Se é o primeiro frame da track, guarda posição e retorna
+        if tid not in self.ultima_posicao:
+            self.ultima_posicao[tid] = pelvis_atual
+            self.ultimo_frame_id[tid] = frame_id
             return None
-        
-        # Calcula distância e velocidade
-        dx = centroide_atual[0] - self.ultima_posicao[0]
-        dy = centroide_atual[1] - self.ultima_posicao[1]
-        distancia = np.sqrt(dx**2 + dy**2)
-        
-        frames_decorridos = frame_id - self.ultimo_frame_id
-        if frames_decorridos > 0:
-            velocidade = distancia / frames_decorridos
-        else:
-            velocidade = 0
-        
+
+        # Calcula deslocamento e velocidade normalizada
+        distancia_raw = np.linalg.norm(pelvis_atual - self.ultima_posicao[tid])
+        frames_decorridos = frame_id - self.ultimo_frame_id[tid]
+        velocidade_raw = distancia_raw / frames_decorridos if frames_decorridos > 0 else 0.0
+
+        # Normaliza a velocidade com base no tamanho do torso (referência de 100px)
+        velocidade = velocidade_raw * (100.0 / torso_length)
+
         # Atualiza histórico
-        self.ultima_posicao = centroide_atual
-        self.ultimo_frame_id = frame_id
-        
-        # Detecta velocidade anormal
-        if velocidade > self.velocidade_maxima:
+        self.ultima_posicao[tid] = pelvis_atual
+        self.ultimo_frame_id[tid] = frame_id
+
+        if velocidade > self.velocidade_maxima and self.frames_since_last_alerts[tid] >= self.cooldown_frames:
+            self.frames_since_last_alerts[tid] = 0
+
             evento = SuspiciousEvent(
                 tipo="velocidade",
                 timestamp=timestamp,
                 confianca=min(velocidade / (self.velocidade_maxima * 2), 1.0),
                 frame_id=frame_id,
-                descricao=f"Velocidade anormal detectada: {velocidade:.1f} px/frame",
+                pessoa_id=track_id,
+                descricao=f"Velocidade anormal: {velocidade:.1f} px/frame (normalizada)",
                 dados_adicionais={
-                    'velocidade': velocidade,
-                    'threshold': self.velocidade_maxima,
-                    'centroide': centroide_atual
+                    'velocidade_normalizada': float(velocidade),
+                    'velocidade_raw': float(velocidade_raw),
+                    'torso_length': float(torso_length),
+                    'threshold': float(self.velocidade_maxima)
                 }
             )
             self.registra_evento(evento)
             return evento
-        
+
         return None

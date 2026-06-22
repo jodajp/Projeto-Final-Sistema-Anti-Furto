@@ -39,8 +39,8 @@ class KinematicFeatureExtractor:
         self.config = config
 
     def feature_dim(self) -> int:
-        # velocities: 17*2, limb dirs: 2 * num_limbs
-        return 17 * 2 + 2 * len(self.limbs)
+        # velocities: 17*2, limb dirs: 2 * num_limbs, distances: 15
+        return 17 * 2 + 2 * len(self.limbs) + 15
 
     def transform(self, coords: NDArray[np.floating]) -> NDArray[np.floating]:
         """Compute kinematic features from input coordinates.
@@ -117,8 +117,86 @@ class KinematicFeatureExtractor:
         # Flatten limb dirs to (B, T, 2*L)
         limb_flat = limb_dirs.reshape(B, T, -1)
 
-        # Concatenate velocity and limb orientation features
-        features = np.concatenate([vel_flat, limb_flat], axis=-1)
+        # (Joint accelerations removed to reduce high-frequency derivative noise)
+
+        # Gather key coordinates for relative distances (B, T, 2)
+        lwrist = coords_clean[:, :, 9, :]
+        rwrist = coords_clean[:, :, 10, :]
+        lhip = coords_clean[:, :, 11, :]
+        rhip = coords_clean[:, :, 12, :]
+        lshoulder = coords_clean[:, :, 5, :]
+        rshoulder = coords_clean[:, :, 6, :]
+        nose = coords_clean[:, :, 0, :]
+
+        # Compute midpoints
+        pelvis = (lhip + rhip) * 0.5
+        neck = (lshoulder + rshoulder) * 0.5
+
+        # Compute Euclidean distances
+        d_lw_lh = np.linalg.norm(lwrist - lhip, axis=-1, keepdims=True)
+        d_lw_rh = np.linalg.norm(lwrist - rhip, axis=-1, keepdims=True)
+        d_lw_ls = np.linalg.norm(lwrist - lshoulder, axis=-1, keepdims=True)
+        d_lw_rs = np.linalg.norm(lwrist - rshoulder, axis=-1, keepdims=True)
+        d_lw_nose = np.linalg.norm(lwrist - nose, axis=-1, keepdims=True)
+        d_lw_pelvis = np.linalg.norm(lwrist - pelvis, axis=-1, keepdims=True)
+        d_lw_neck = np.linalg.norm(lwrist - neck, axis=-1, keepdims=True)
+
+        d_rw_rh = np.linalg.norm(rwrist - rhip, axis=-1, keepdims=True)
+        d_rw_lh = np.linalg.norm(rwrist - lhip, axis=-1, keepdims=True)
+        d_rw_rs = np.linalg.norm(rwrist - rshoulder, axis=-1, keepdims=True)
+        d_rw_ls = np.linalg.norm(rwrist - lshoulder, axis=-1, keepdims=True)
+        d_rw_nose = np.linalg.norm(rwrist - nose, axis=-1, keepdims=True)
+        d_rw_pelvis = np.linalg.norm(rwrist - pelvis, axis=-1, keepdims=True)
+        d_rw_neck = np.linalg.norm(rwrist - neck, axis=-1, keepdims=True)
+
+        d_lw_rw = np.linalg.norm(lwrist - rwrist, axis=-1, keepdims=True)
+
+        # Concatenate distance features: (B, T, 15)
+        distances = np.concatenate([
+            d_lw_lh, d_lw_rh, d_lw_ls, d_lw_rs, d_lw_nose, d_lw_pelvis, d_lw_neck,
+            d_rw_rh, d_rw_lh, d_rw_rs, d_rw_ls, d_rw_nose, d_rw_pelvis, d_rw_neck,
+            d_lw_rw
+        ], axis=-1)
+
+        # Handle missing keypoint masks for distances (set distance to 0.0 if either endpoint is missing)
+        m_lw = missing_mask[:, :, 9]
+        m_rw = missing_mask[:, :, 10]
+        m_lh = missing_mask[:, :, 11]
+        m_rh = missing_mask[:, :, 12]
+        m_ls = missing_mask[:, :, 5]
+        m_rs = missing_mask[:, :, 6]
+        m_nose = missing_mask[:, :, 0]
+        m_pelvis = m_lh | m_rh
+        m_neck = m_ls | m_rs
+
+        mask_lw_lh = (m_lw | m_lh)[..., None]
+        mask_lw_rh = (m_lw | m_rh)[..., None]
+        mask_lw_ls = (m_lw | m_ls)[..., None]
+        mask_lw_rs = (m_lw | m_rs)[..., None]
+        mask_lw_nose = (m_lw | m_nose)[..., None]
+        mask_lw_pelvis = (m_lw | m_pelvis)[..., None]
+        mask_lw_neck = (m_lw | m_neck)[..., None]
+
+        mask_rw_rh = (m_rw | m_rh)[..., None]
+        mask_rw_lh = (m_rw | m_lh)[..., None]
+        mask_rw_rs = (m_rw | m_rs)[..., None]
+        mask_rw_ls = (m_rw | m_ls)[..., None]
+        mask_rw_nose = (m_rw | m_nose)[..., None]
+        mask_rw_pelvis = (m_rw | m_pelvis)[..., None]
+        mask_rw_neck = (m_rw | m_neck)[..., None]
+
+        mask_lw_rw = (m_lw | m_rw)[..., None]
+
+        dist_masks = np.concatenate([
+            mask_lw_lh, mask_lw_rh, mask_lw_ls, mask_lw_rs, mask_lw_nose, mask_lw_pelvis, mask_lw_neck,
+            mask_rw_rh, mask_rw_lh, mask_rw_rs, mask_rw_ls, mask_rw_nose, mask_rw_pelvis, mask_rw_neck,
+            mask_lw_rw
+        ], axis=-1)
+
+        distances = np.where(dist_masks, 0.0, distances)
+
+        # Concatenate velocity, limb orientation, and distances
+        features = np.concatenate([vel_flat, limb_flat, distances], axis=-1)
 
         # Final safety: replace any NaNs or infs with zeros
         features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)

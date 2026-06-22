@@ -30,7 +30,7 @@ activities:
     plugin: Atividades_Suspeitas.shoplifting_detector:ShopliftingActivityDetector
     params:
       model_path: ./models/phase4_experiment_model.onnx
-      seq_length: 30
+      seq_length: 45
       threshold: 0.50
       cooldown_frames: 45
   - enabled: false
@@ -52,7 +52,7 @@ activities:
 
 alerts:
   handlers:
-    - enabled: true
+    - enabled: false
       plugin: Alertas.alert_system:AlertSystem
       params:
         pasta_alertas: ./Alertas/history/
@@ -102,6 +102,7 @@ tracker:
   track_thresh: 0.35
   track_buffer: 90
   match_thresh: 0.7
+  dedup_thresh: 0.55
 
 temporal_filtering:
   enabled: true
@@ -141,8 +142,8 @@ spatial_normalization:
 
 # Phase 4: sequence classification (shoplifting vs normal)
 phase4:
-  sequence_length: 30
-  input_size: 34
+  sequence_length: 45
+  input_size: 60
   hidden_size: 128
   num_layers: 1
   attention_size: 64

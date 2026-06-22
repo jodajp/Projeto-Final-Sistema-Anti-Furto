@@ -39,7 +39,7 @@ class BahdanauAttention(nn.Module):
 
 
 class Phase4Classifier(nn.Module):
-    """Lightweight causal LSTM with Bahdanau attention for binary classification.
+    """Lightweight LSTM with Bahdanau attention for binary classification.
 
     Config-driven: pass a `Phase4Config` instance to control dimensions.
     """
@@ -53,13 +53,13 @@ class Phase4Classifier(nn.Module):
             hidden_size=config.hidden_size,
             num_layers=config.num_layers,
             batch_first=True,
-            bidirectional=False,
+            bidirectional=config.bidirectional if hasattr(config, "bidirectional") else False,
             dropout=config.dropout if config.num_layers > 1 else 0.0,
         )
 
-        self.attention = BahdanauAttention(config.hidden_size, config.attention_size)
-
-        self.classifier = nn.Linear(config.hidden_size, 1)
+        self.lstm_hidden_dim = config.hidden_size * 2 if self.lstm.bidirectional else config.hidden_size
+        self.attention = BahdanauAttention(self.lstm_hidden_dim, config.attention_size)
+        self.classifier = nn.Linear(self.lstm_hidden_dim, 1)
 
     def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
         """Forward pass.
@@ -71,15 +71,19 @@ class Phase4Classifier(nn.Module):
             logits: (B,) raw logits
             attn_weights: (B, T) attention distribution over time
         """
-        outputs, (h_n, c_n) = self.lstm(x)  # outputs: (B, T, H)
+        outputs, (h_n, c_n) = self.lstm(x)  # outputs: (B, T, lstm_hidden_dim)
 
-        # final hidden state from last LSTM layer
-        final_hidden = h_n[-1]  # (B, H)
+        if self.lstm.bidirectional:
+            # h_n shape: (num_layers * 2, B, hidden_size)
+            # Concatenate the last layer's forward and backward hidden states
+            final_hidden = torch.cat([h_n[-2], h_n[-1]], dim=1)  # (B, hidden_size * 2)
+        else:
+            final_hidden = h_n[-1]  # (B, hidden_size)
 
         attn_weights = self.attention(outputs, final_hidden)  # (B, T)
 
         # context vector: weighted sum over time
-        context = torch.sum(outputs * attn_weights.unsqueeze(-1), dim=1)  # (B, H)
+        context = torch.sum(outputs * attn_weights.unsqueeze(-1), dim=1)  # (B, lstm_hidden_dim)
 
         logits = self.classifier(context).squeeze(-1)  # (B,)
         return logits, attn_weights

@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
@@ -33,10 +31,7 @@ class ConfidenceWeightedBCELoss(nn.Module):
         Returns:
             loss: scalar Tensor if reduction != 'none', else Tensor of shape (B,)
         """
-        if logits.dim() > 1 and logits.shape[-1] == 1:
-            logits = logits.view(-1)
-        else:
-            logits = logits.reshape(-1)
+        logits = logits.reshape(-1)
 
         targets = targets.reshape(-1).to(dtype=logits.dtype)
         w_raw = w_raw.reshape(-1).to(dtype=logits.dtype)
@@ -81,10 +76,7 @@ class ConfidenceWeightedFocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, logits: Tensor, targets: Tensor, w_raw: Tensor) -> Tensor:
-        if logits.dim() > 1 and logits.shape[-1] == 1:
-            logits = logits.view(-1)
-        else:
-            logits = logits.reshape(-1)
+        logits = logits.reshape(-1)
 
         targets = targets.reshape(-1).to(dtype=logits.dtype)
         w_raw = w_raw.reshape(-1).to(dtype=logits.dtype)

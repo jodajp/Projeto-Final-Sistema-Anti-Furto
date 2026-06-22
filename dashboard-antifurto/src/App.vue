@@ -18,6 +18,15 @@
         </div>
       </div>
 
+      <div v-if="currentView === 'estatisticas'" class="page-content">
+        <header class="page-header">
+          <h1>Estatísticas</h1>
+        </header>
+        <div class="vertical-layout">
+          <Estatisticas />
+        </div>
+      </div>
+
       <div v-if="currentView === 'alertas'" class="page-content">
         <header class="page-header">
           <h1>Histórico de Eventos</h1>
@@ -62,6 +71,7 @@ import SideBar from './components/SideBar.vue'
 import ClusterMetrics from './components/ClusterMetrics.vue'
 import AlertList from './components/AlertList.vue'
 import CameraView from './components/CameraView.vue'
+import Estatisticas from './components/Estatisticas.vue'
 
 // IMPORTS DAS NOVAS PÁGINAS QUE ESTAVAM EM FALTA:
 import LoginView from './components/LoginView.vue'

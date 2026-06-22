@@ -121,53 +121,64 @@ class DatabaseHandler:
         """ Corre em background para não atrasar o vídeo """
         print("[Edge Sync] Motor de Sincronização iniciado.")
         while True:
-            try:
-                sync_conn = sqlite3.connect(DB_PATH)
-                sync_cursor = sync_conn.cursor()
-                
-                # 1. ALERTAS
-                sync_cursor.execute("SELECT id, track_id, tipo_alerta, confianca, timestamp FROM alertas WHERE sincronizado = 0")
-                for db_id, track_id, tipo_alerta, confianca, ts in sync_cursor.fetchall():
-                    payload = {"track_id": track_id, "tipo_alerta": tipo_alerta, "confianca": confianca, "timestamp": ts}
-                    resp = requests.post(CLOUD_API_ALERTAS, json=payload, timeout=3.0)
-                    if resp.status_code == 200:
-                        sync_cursor.execute("UPDATE alertas SET sincronizado = 1 WHERE id = ?", (db_id,))
-                        sync_conn.commit()
-                        print(f" -> [Cloud] Alerta {db_id} sincronizado!")
-
-                # 2. MÉTRICAS (Agora extrai e envia as pessoas_detetadas)
-                sync_cursor.execute("""
-                    SELECT id, node_id, fps, frame_count, detection_count, 
-                           inference_calls, average_inference_ms, success_rate, 
-                           uptime_seconds, pessoas_detetadas 
-                    FROM metricas WHERE sincronizado = 0
-                """)
-                for metrica in sync_cursor.fetchall():
-                    db_id, n_id, fps, f_count, d_count, i_calls, avg_inf, succ, up, pessoas = metrica
-                    
-                    payload_metrica = {
-                        "node_id": n_id,
-                        "fps": fps,
-                        "frame_count": f_count,
-                        "detection_count": d_count,
-                        "inference_calls": i_calls,
-                        "average_inference_ms": avg_inf,
-                        "success_rate": succ,
-                        "uptime_seconds": up,
-                        "pessoas_detetadas": pessoas # <--- O campo do teu colega
-                    }
-                    
-                    resp = requests.post(CLOUD_API_METRICAS, json=payload_metrica, timeout=3.0)
-                    if resp.status_code == 200:
-                        sync_cursor.execute("UPDATE metricas SET sincronizado = 1 WHERE id = ?", (db_id,))
-                        sync_conn.commit()
-                        print(f" -> [Cloud] Métrica {db_id} sincronizada!")
-
-                sync_conn.close()
-                
-            except requests.exceptions.RequestException:
-                pass # Sem net, tenta na próxima ronda
-            except Exception as e:
-                print(f"[Edge Sync] Erro no loop: {e}")
-            
+            self._sincronizar_dados()
             time.sleep(5)
+
+    def _sincronizar_dados(self):
+        """ Realiza o envio de alertas e métricas não sincronizados para a nuvem """
+        try:
+            sync_conn = sqlite3.connect(DB_PATH)
+            sync_cursor = sync_conn.cursor()
+            
+            # 1. ALERTAS
+            sync_cursor.execute("SELECT id, track_id, tipo_alerta, confianca, timestamp FROM alertas WHERE sincronizado = 0")
+            for db_id, track_id, tipo_alerta, confianca, ts in sync_cursor.fetchall():
+                payload = {"track_id": track_id, "tipo_alerta": tipo_alerta, "confianca": confianca, "timestamp": ts}
+                resp = requests.post(CLOUD_API_ALERTAS, json=payload, timeout=3.0)
+                if resp.status_code == 200:
+                    sync_cursor.execute("UPDATE alertas SET sincronizado = 1 WHERE id = ?", (db_id,))
+                    sync_conn.commit()
+                    print(f" -> [Cloud] Alerta {db_id} sincronizado!")
+
+            # 2. MÉTRICAS (Agora extrai e envia as pessoas_detetadas)
+            sync_cursor.execute("""
+                SELECT id, node_id, fps, frame_count, detection_count, 
+                       inference_calls, average_inference_ms, success_rate, 
+                       uptime_seconds, pessoas_detetadas 
+                FROM metricas WHERE sincronizado = 0
+            """)
+            for metrica in sync_cursor.fetchall():
+                db_id, n_id, fps, f_count, d_count, i_calls, avg_inf, succ, up, pessoas = metrica
+                
+                payload_metrica = {
+                    "node_id": n_id,
+                    "fps": fps,
+                    "frame_count": f_count,
+                    "detection_count": d_count,
+                    "inference_calls": i_calls,
+                    "average_inference_ms": avg_inf,
+                    "success_rate": succ,
+                    "uptime_seconds": up,
+                    "pessoas_detetadas": pessoas
+                }
+                
+                resp = requests.post(CLOUD_API_METRICAS, json=payload_metrica, timeout=3.0)
+                if resp.status_code == 200:
+                    sync_cursor.execute("UPDATE metricas SET sincronizado = 1 WHERE id = ?", (db_id,))
+                    sync_conn.commit()
+                    print(f" -> [Cloud] Métrica {db_id} sincronizada!")
+
+            sync_conn.close()
+            
+        except requests.exceptions.RequestException:
+            pass # Sem net, tenta na próxima ronda
+        except Exception as e:
+            print(f"[Edge Sync] Erro no loop: {e}")
+
+    def close(self):
+        """ Força sincronização de dados pendentes antes de fechar a conexão """
+        self._sincronizar_dados()
+        try:
+            self.conn.close()
+        except Exception:
+            pass

@@ -41,6 +41,7 @@ def grouped_stratified_split(
     val_ratio: float,
     test_ratio: float,
     seed: int = 42,
+    split_manual: bool = False,
 ) -> SplitBundle:
     """
     Split samples grouped by clip_id so that all windows of any single clip
@@ -58,16 +59,59 @@ def grouped_stratified_split(
     for cid, idxs in clip_to_indices.items():
         clip_labels[cid] = int(np.max(labels[idxs]))
         
-    # Stratify split unique clip_ids
+    # Separate manual/recorded clips (no colon) from RetailS clips (with colon)
     unique_clips = list(clip_to_indices.keys())
-    unique_labels = np.array([clip_labels[cid] for cid in unique_clips])
+    manual_clips = [cid for cid in unique_clips if ":" not in cid]
+    retails_clips = [cid for cid in unique_clips if ":" in cid]
     
     train_clips: List[str] = []
     val_clips: List[str] = []
     test_clips: List[str] = []
     
-    for cls in np.unique(unique_labels):
-        cls_clips = [cid for cid in unique_clips if clip_labels[cid] == cls]
+    if split_manual:
+        print(f"[INFO] Stratifying and splitting {len(manual_clips)} manual/recorded clips across splits.")
+        manual_labels = np.array([clip_labels[cid] for cid in manual_clips])
+        for cls in np.unique(manual_labels):
+            cls_clips = [cid for cid in manual_clips if clip_labels[cid] == cls]
+            rng.shuffle(cls_clips)
+            
+            total = len(cls_clips)
+            if total == 0:
+                continue
+                
+            test_count = int(round(total * test_ratio)) if test_ratio > 0 else 0
+            if test_ratio > 0 and total > 1:
+                test_count = max(1, test_count)
+            test_count = min(test_count, max(0, total - 2)) if total > 2 else min(test_count, max(0, total - 1))
+            
+            remaining = total - test_count
+            val_count = int(round(total * val_ratio)) if val_ratio > 0 else 0
+            if val_ratio > 0 and remaining > 1:
+                val_count = max(1, val_count)
+            val_count = min(val_count, max(0, remaining - 1)) if remaining > 1 else min(val_count, max(0, remaining))
+            
+            test_part = cls_clips[:test_count]
+            val_part = cls_clips[test_count:test_count + val_count]
+            train_part = cls_clips[test_count + val_count:]
+            
+            if len(train_part) == 0 and len(cls_clips) > 0:
+                train_part = cls_clips[-1:]
+                if len(test_part) > 0:
+                    test_part = test_part[:-1]
+                elif len(val_part) > 0:
+                    val_part = val_part[:-1]
+                    
+            train_clips.extend(train_part)
+            val_clips.extend(val_part)
+            test_clips.extend(test_part)
+    else:
+        print(f"[INFO] Forcing {len(manual_clips)} manual/recorded clips into the Training split.")
+        train_clips.extend(manual_clips)
+        
+    # Stratify split unique RetailS clip_ids
+    retails_labels = np.array([clip_labels[cid] for cid in retails_clips])
+    for cls in np.unique(retails_labels):
+        cls_clips = [cid for cid in retails_clips if clip_labels[cid] == cls]
         rng.shuffle(cls_clips)
         
         total = len(cls_clips)
@@ -130,11 +174,12 @@ def build_loaders(
     augment: bool,
     val_ratio: float,
     test_ratio: float,
+    split_manual: bool = False,
 ):
     base_dataset = Phase4PoseDataset(samples, augment=False)
     labels = base_dataset.labels.astype(np.int32)
     clip_ids = base_dataset.clip_ids
-    split = grouped_stratified_split(clip_ids, labels, val_ratio=val_ratio, test_ratio=test_ratio, seed=seed)
+    split = grouped_stratified_split(clip_ids, labels, val_ratio=val_ratio, test_ratio=test_ratio, seed=seed, split_manual=split_manual)
 
     if len(split.val_idx) == 0:
         split.val_idx = split.train_idx[: max(1, len(split.train_idx) // 5)]
@@ -193,61 +238,7 @@ def collect_predictions(model: torch.nn.Module, dataloader: DataLoader, device: 
     return {"probabilities": probabilities, "labels": labels, "sources": sources}
 
 
-def best_threshold(probabilities: Sequence[float], labels: Sequence[int], metric: str = "hprs") -> Tuple[float, Dict[str, float]]:
-    probs = np.asarray(probabilities, dtype=np.float32)
-    y_true = np.asarray(labels, dtype=np.int32)
-    if len(probs) == 0:
-        return 0.5, {"f1": 0.0, "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "specificity": 0.0, "hprs": 0.0}
-
-    best_t = 0.5
-    best_score = -1.0
-    best_metrics: Dict[str, float] = {}
-
-    for threshold in np.linspace(0.05, 0.95, 181):
-        y_pred = (probs >= threshold).astype(np.int32)
-        tp = int(((y_pred == 1) & (y_true == 1)).sum())
-        tn = int(((y_pred == 0) & (y_true == 0)).sum())
-        fp = int(((y_pred == 1) & (y_true == 0)).sum())
-        fn = int(((y_pred == 0) & (y_true == 1)).sum())
-
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-        accuracy = (tp + tn) / max(1, len(y_true))
-        
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
-        
-        # HPRS score: harmonic mean of precision, recall, and specificity
-        if precision > 0 and recall > 0 and specificity > 0:
-            hprs = 3 / (1.0 / precision + 1.0 / recall + 1.0 / specificity)
-        else:
-            hprs = 0.0
-
-        score = hprs if metric == "hprs" else f1
-        if score > best_score:
-            best_score = score
-            best_t = float(threshold)
-            best_metrics = {
-                "precision": float(precision),
-                "recall": float(recall),
-                "specificity": float(specificity),
-                "f1": float(f1),
-                "hprs": float(hprs),
-                "accuracy": float(accuracy),
-                "tp": float(tp),
-                "tn": float(tn),
-                "fp": float(fp),
-                "fn": float(fn),
-            }
-
-    return best_t, best_metrics
-
-
-def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], threshold: float) -> Dict[str, float]:
-    probs = np.asarray(probabilities, dtype=np.float32)
-    y_true = np.asarray(labels, dtype=np.int32)
-    y_pred = (probs >= threshold).astype(np.int32)
-
+def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     tp = int(((y_pred == 1) & (y_true == 1)).sum())
     tn = int(((y_pred == 0) & (y_true == 0)).sum())
     fp = int(((y_pred == 1) & (y_true == 0)).sum())
@@ -265,7 +256,6 @@ def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], thr
         hprs = 0.0
 
     return {
-        "threshold": float(threshold),
         "precision": float(precision),
         "recall": float(recall),
         "specificity": float(specificity),
@@ -277,6 +267,37 @@ def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], thr
         "fp": float(fp),
         "fn": float(fn),
     }
+
+
+def best_threshold(probabilities: Sequence[float], labels: Sequence[int], metric: str = "hprs") -> Tuple[float, Dict[str, float]]:
+    probs = np.asarray(probabilities, dtype=np.float32)
+    y_true = np.asarray(labels, dtype=np.int32)
+    if len(probs) == 0:
+        return 0.5, {"f1": 0.0, "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "specificity": 0.0, "hprs": 0.0}
+
+    best_t = 0.5
+    best_score = -1.0
+    best_metrics: Dict[str, float] = {}
+
+    for threshold in np.linspace(0.05, 0.95, 181):
+        y_pred = (probs >= threshold).astype(np.int32)
+        metrics = _compute_metrics(y_true, y_pred)
+        score = metrics["hprs"] if metric == "hprs" else metrics["f1"]
+        if score > best_score:
+            best_score = score
+            best_t = float(threshold)
+            best_metrics = metrics
+
+    return best_t, best_metrics
+
+
+def confusion_metrics(probabilities: Sequence[float], labels: Sequence[int], threshold: float) -> Dict[str, float]:
+    probs = np.asarray(probabilities, dtype=np.float32)
+    y_true = np.asarray(labels, dtype=np.int32)
+    y_pred = (probs >= threshold).astype(np.int32)
+    metrics = _compute_metrics(y_true, y_pred)
+    metrics["threshold"] = float(threshold)
+    return metrics
 
 
 def print_examples(probabilities: Sequence[float], labels: Sequence[int], sources: Sequence[str], threshold: float, limit: int = 10) -> None:
@@ -291,7 +312,7 @@ def print_examples(probabilities: Sequence[float], labels: Sequence[int], source
 def main() -> None:
     parser = argparse.ArgumentParser(description="End-to-end Phase 4 experiment runner")
     parser.add_argument("--sequence-length", type=int, default=30)
-    parser.add_argument("--manual-count", type=int, default=2)
+    parser.add_argument("--manual-count", type=int, default=-1, help="Number of manual clips to load, or -1 for all")
     parser.add_argument("--retail-normal-count", type=int, default=10)
     parser.add_argument("--retail-suspicious-count", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -303,21 +324,27 @@ def main() -> None:
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--test-ratio", type=float, default=0.2)
     parser.add_argument("--augment", action="store_true", help="Enable light geometric augmentation on the train split")
+    parser.add_argument("--split-manual", action="store_true", help="Split manual/recorded clips across train/val/test splits")
     parser.add_argument("--save-path", type=str, default=str(ROOT_DIR / "Edge" / "models" / "phase4_experiment_model.pth"))
     parser.add_argument("--report-path", type=str, default=str(ROOT_DIR / "Edge" / "models" / "phase4_experiment_report.json"))
     parser.add_argument("--metric", type=str, choices=["f1", "hprs"], default="hprs", help="Metric to optimize the decision threshold")
     parser.add_argument("--loss", type=str, choices=["bce", "focal"], default="focal", help="Loss function type")
     parser.add_argument("--focal-alpha", type=float, default=0.25, help="Focal Loss alpha parameter")
     parser.add_argument("--focal-gamma", type=float, default=2.0, help="Focal Loss gamma parameter")
+    parser.add_argument("--patience", type=int, default=10, help="Early stopping patience")
+    parser.add_argument("--dropout", type=float, default=0.2, help="LSTM dropout rate")
+    parser.add_argument("--num-layers", type=int, default=1, help="Number of LSTM layers")
+    parser.add_argument("--bidirectional", action="store_true", help="Enable Bidirectional LSTM")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
+    manual_limit = 999999 if args.manual_count == -1 else args.manual_count
     data_config = Phase4DataConfig(
         sequence_length=args.sequence_length,
-        manual_limit=args.manual_count,
+        manual_limit=manual_limit,
         retail_normal_limit=args.retail_normal_count,
         retail_suspicious_limit=args.retail_suspicious_count,
     )
@@ -340,6 +367,7 @@ def main() -> None:
         augment=args.augment,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
+        split_manual=args.split_manual,
     )
 
     print(f"Split sizes -> train={len(split.train_idx)} | val={len(split.val_idx)} | test={len(split.test_idx)}")
@@ -375,7 +403,9 @@ def main() -> None:
         sequence_length=args.sequence_length,
         input_size=extractor.feature_dim(),
         hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
         attention_size=args.attention_size,
+        dropout=args.dropout,
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -383,6 +413,8 @@ def main() -> None:
         loss_type=args.loss,
         focal_alpha=args.focal_alpha,
         focal_gamma=args.focal_gamma,
+        bidirectional=args.bidirectional,
+        patience=args.patience,
     )
 
     model = Phase4Classifier(config)
@@ -392,7 +424,7 @@ def main() -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     best_val = float("inf")
-    patience = 5
+    patience = args.patience
     epochs_no_improve = 0
     print("[2/5] Training...")
     for epoch in range(1, config.epochs + 1):
@@ -409,6 +441,10 @@ def main() -> None:
             if epochs_no_improve >= patience:
                 print(f"[EARLY STOPPING] Triggered early stopping at epoch {epoch:02d} (best val loss: {best_val:.4f})")
                 break
+        
+        if epoch == config.epochs:
+            print(f"[INFO] Saving final epoch checkpoint to {save_path}")
+            trainer.save(str(save_path))
 
     print("[3/5] Loading best checkpoint...")
     best_model = Phase4Classifier(config)
@@ -417,7 +453,36 @@ def main() -> None:
 
     device = torch.device("cpu")
     val_pred = collect_predictions(best_model.to(device), val_loader, device)
-    threshold, threshold_metrics = best_threshold(val_pred["probabilities"], val_pred["labels"], metric=args.metric)
+    
+    # Calibrate decision threshold on manual clips (clip-level) if available
+    manual_samples = [s for s in samples if ":" not in s.clip_id]
+    if len(manual_samples) > 0:
+        print(f"[INFO] Calibrating decision threshold on {len(manual_samples)} manual windows (clip-level)...")
+        manual_dataset = Phase4PoseDataset(manual_samples, augment=False)
+        manual_loader = DataLoader(manual_dataset, batch_size=args.batch_size, shuffle=False)
+        manual_pred = collect_predictions(best_model.to(device), manual_loader, device)
+        
+        # Group by clip_id
+        clip_probs = {}
+        clip_labels = {}
+        for prob, label, src in zip(manual_pred["probabilities"], manual_pred["labels"], manual_pred["sources"]):
+            # Normalize clip ID (strip oversampling suffix)
+            clip_id = src.split("_dup")[0]
+            clip_probs.setdefault(clip_id, []).append(prob)
+            clip_labels[clip_id] = int(label)
+            
+        # Compute max probability per clip
+        manual_clip_probs = []
+        manual_clip_labels = []
+        for cid, probs in clip_probs.items():
+            manual_clip_probs.append(max(probs))
+            manual_clip_labels.append(clip_labels[cid])
+            
+        threshold, threshold_metrics = best_threshold(manual_clip_probs, manual_clip_labels, metric=args.metric)
+        print(f"[INFO] Calibrated threshold on manual clips: {threshold:.3f}")
+    else:
+        print(f"[INFO] Calibrating decision threshold using all {len(val_pred['probabilities'])} validation windows.")
+        threshold, threshold_metrics = best_threshold(val_pred["probabilities"], val_pred["labels"], metric=args.metric)
     test_pred = collect_predictions(best_model.to(device), test_loader, device)
     test_metrics = confusion_metrics(test_pred["probabilities"], test_pred["labels"], threshold)
 
@@ -457,6 +522,10 @@ def main() -> None:
             "loss": args.loss,
             "focal_alpha": args.focal_alpha,
             "focal_gamma": args.focal_gamma,
+            "patience": args.patience,
+            "dropout": args.dropout,
+            "num_layers": args.num_layers,
+            "bidirectional": args.bidirectional,
         },
         "sample_counts": {"normal": normal, "suspicious": suspicious, "total": len(samples)},
         "split_sizes": {"train": int(len(split.train_idx)), "val": int(len(split.val_idx)), "test": int(len(split.test_idx))},

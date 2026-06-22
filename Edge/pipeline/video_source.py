@@ -15,17 +15,9 @@ class CameraSource(BaseVideoSource):
         self.config = config
 
     def open(self) -> cv2.VideoCapture:
-        # Garante que o ID da câmara é um inteiro
         source = int(self.config.get("id", 0))
         backend_name = self.config.get("backend", "CAP_DSHOW")
         backend = getattr(cv2, backend_name, cv2.CAP_DSHOW)
-
-        if isinstance(source, str):
-            if source.isdigit():
-                source = int(source)
-            else:
-                # It is a video file path, use default ANY backend
-                backend = cv2.CAP_ANY
 
         cap = cv2.VideoCapture(source, backend)
 
@@ -39,8 +31,8 @@ class CameraSource(BaseVideoSource):
         cap.set(cv2.CAP_PROP_FPS, fps)
 
         if not cap.isOpened():
-            raise RuntimeError(f"Erro: Não foi possível abrir a câmara com ID: {source}")
-        
+            raise RuntimeError(f"Erro: Nao foi possivel abrir a camara com ID: {source}")
+
         print(f"[CAMERA] Fonte {source} iniciada ({width}x{height} @ {fps}fps)")
         return cap
 

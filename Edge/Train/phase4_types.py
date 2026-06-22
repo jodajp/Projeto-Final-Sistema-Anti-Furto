@@ -18,4 +18,6 @@ class Phase4Config:
     loss_type: str = "focal"  # "bce" or "focal"
     focal_alpha: float = 0.25
     focal_gamma: float = 2.0
+    bidirectional: bool = False
+    patience: int = 10
     device: Optional[str] = None
