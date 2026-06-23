@@ -9,7 +9,7 @@ from pathlib import Path
 from Alertas.database_handler import DatabaseHandler
 from bytetracker import BYTETracker
 from Edge.Detecao.detector_factory import create_detector
-from Edge.Detecao.skeleton import LEFT_WRIST, RIGHT_WRIST, LEFT_HIP, RIGHT_HIP
+from Edge.Detecao.skeleton import LEFT_WRIST, RIGHT_WRIST, LEFT_HIP, RIGHT_HIP, LEFT_ELBOW, RIGHT_ELBOW
 from .plugins import load_activities, load_alert_handlers
 from .metrics import PipelineMetrics
 from .renderer import PoseRenderer
@@ -110,12 +110,14 @@ class AntiTheftOrchestrator:
 
         # Configuração de detecção de pegada em zonas
         self.zone_grab_detection = bool(zone_cfg.get('grab_detection_enabled', True))
-        self.zone_grab_min_frames = int(zone_cfg.get('min_hold_frames', 12))
-        self.zone_grab_max_speed = float(zone_cfg.get('max_hand_speed', 4.0))
-        self.zone_grab_max_relative_speed = float(zone_cfg.get('max_relative_hand_speed', 3.0))
+        self.zone_grab_min_frames = int(zone_cfg.get('min_hold_frames', 10))
+        self.zone_grab_entry_speed_threshold = float(zone_cfg.get('entry_speed_threshold', 5.0))
+        self.zone_grab_arm_flex_threshold = float(zone_cfg.get('arm_flex_threshold', 0.85))
+        self.zone_grab_deceleration_threshold = float(zone_cfg.get('deceleration_threshold', 0.5))
         self.track_zone_hold_frames = {}
         self.track_hand_last_pos = {}
         self.track_body_last_pos = {}
+        self.track_zone_entry_info = {}
 
         # Configuração de saída
         camera_cfg = config.camera()
@@ -299,6 +301,16 @@ class AntiTheftOrchestrator:
             return None
         return np.mean(candidates, axis=0)
 
+    def _compute_arm_length(self, kpts, scrs, elbow_idx, wrist_idx):
+        """Calcula o comprimento do braço (elbow-to-wrist distance)."""
+        if scrs.shape[0] <= max(elbow_idx, wrist_idx):
+            return None
+        if scrs[elbow_idx] < 0.35 or scrs[wrist_idx] < 0.35:
+            return None
+        elbow_pos = kpts[elbow_idx]
+        wrist_pos = kpts[wrist_idx]
+        return np.linalg.norm(wrist_pos - elbow_pos)
+
     def _check_hand_zone(self, ent, track_id, timestamp):
         kpts = np.asarray(ent['kpts'], dtype=np.float32)
         scrs = np.asarray(ent['scrs'], dtype=np.float32)
@@ -320,38 +332,76 @@ class AntiTheftOrchestrator:
             self.track_body_last_pos[track_id] = body_center
 
         for hand_name, (x, y) in hands:
+            elbow_idx = LEFT_ELBOW if hand_name == 'left' else RIGHT_ELBOW
+            arm_length = self._compute_arm_length(kpts, scrs, elbow_idx, LEFT_WRIST if hand_name == 'left' else RIGHT_WRIST)
+            
             zone = self._get_zone_for_point(x, y)
             zone_id = zone['id'] if zone else None
             previous_zone = self.track_hand_last_zone.get((track_id, hand_name))
 
+            entry_key = (track_id, hand_name, zone_id)
+            
             if zone_id != previous_zone:
                 self.track_hand_last_zone[(track_id, hand_name)] = zone_id
                 self.track_zone_hold_frames.pop((track_id, hand_name, previous_zone), None)
+                self.track_zone_entry_info.pop(entry_key, None)
                 self.track_hand_last_pos[(track_id, hand_name)] = np.array([x, y], dtype=np.float32)
-                if zone:
-                    print(f"[ZONE] ID {track_id} ({hand_name}) em {zone['name']} x={x:.1f}, y={y:.1f}")
 
             if zone:
                 current_pos = np.array([x, y], dtype=np.float32)
                 prev_pos = self.track_hand_last_pos.get((track_id, hand_name))
                 speed = np.linalg.norm(current_pos - prev_pos) if prev_pos is not None else 0.0
                 self.track_hand_last_pos[(track_id, hand_name)] = current_pos
-                relative_speed = speed
-                if body_center is not None:
-                    relative_speed = max(0.0, speed - body_speed)
 
+                # Ao entrar na zona, guardar informações de entrada
+                if entry_key not in self.track_zone_entry_info:
+                    self.track_zone_entry_info[entry_key] = {
+                        'entry_speed': speed,
+                        'entry_arm_length': arm_length,
+                        'frames_in_zone': 0
+                    }
+
+                entry_info = self.track_zone_entry_info[entry_key]
+                entry_info['frames_in_zone'] += 1
+                
+                # Detectar grab: desaceleração + flexão do braço
+                grab_criterion = False
+                deceleration_ratio = 0.0
+                arm_flex_ratio = 0.0
+                
+                if entry_info['entry_speed'] > self.zone_grab_entry_speed_threshold:
+                    deceleration_ratio = speed / max(entry_info['entry_speed'], 0.1)
+                    if deceleration_ratio <= self.zone_grab_deceleration_threshold:
+                        grab_criterion = True
+                
+                if arm_length is not None and entry_info['entry_arm_length'] is not None:
+                    arm_flex_ratio = arm_length / max(entry_info['entry_arm_length'], 1.0)
+                    if arm_flex_ratio <= self.zone_grab_arm_flex_threshold and grab_criterion:
+                        grab_criterion = True
+                    elif arm_flex_ratio <= (self.zone_grab_arm_flex_threshold * 0.9):  # Flexão forte
+                        grab_criterion = True
+                
                 hold_key = (track_id, hand_name, zone_id)
-                if (relative_speed <= self.zone_grab_max_relative_speed and
-                        speed <= self.zone_grab_max_speed):
+                if grab_criterion or speed < 1.5:  # Mão muito lenta também indica grab
                     self.track_zone_hold_frames[hold_key] = self.track_zone_hold_frames.get(hold_key, 0) + 1
                 else:
-                    self.track_zone_hold_frames[hold_key] = 1
+                    self.track_zone_hold_frames[hold_key] = 0
 
                 hold_frames = self.track_zone_hold_frames[hold_key]
                 grab_detected = (self.zone_grab_detection and
                                  hold_frames >= self.zone_grab_min_frames)
                 if grab_detected and hold_frames == self.zone_grab_min_frames:
-                    print(f"[GRAB] ID {track_id} ({hand_name}) possivel pegou algo em {zone['name']} ({hold_frames} frames estáveis, rel_speed={relative_speed:.2f})")
+                    print(f"[GRAB] ID {track_id} ({hand_name}) PEGOU ALGO em {zone['name']} (decel={deceleration_ratio:.2f}, flex={arm_flex_ratio:.2f})")
+                    self.db.salvar_evento_zona(
+                        track_id=int(track_id),
+                        zone_id=int(zone_id),
+                        zone_name=str(zone['name']),
+                        hand=str(hand_name),
+                        deceleration_ratio=float(deceleration_ratio),
+                        arm_flex_ratio=float(arm_flex_ratio),
+                        arm_length=float(arm_length),
+                        timestamp=timestamp
+                    )
 
                 ent.setdefault('hand_zones', []).append({
                     'hand': hand_name,
@@ -360,6 +410,9 @@ class AntiTheftOrchestrator:
                     'point': (x, y),
                     'zone_hold_frames': int(hold_frames),
                     'grab_candidate': grab_detected,
+                    'arm_length': float(arm_length) if arm_length else None,
+                    'deceleration_ratio': float(deceleration_ratio),
+                    'arm_flex_ratio': float(arm_flex_ratio),
                 })
 
     def _processar_zonas(self, entidades, timestamp):

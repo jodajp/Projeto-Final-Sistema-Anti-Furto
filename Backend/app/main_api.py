@@ -14,7 +14,9 @@ import httpx
 from app.database import engine_master, Base, get_db_master, get_db_replica
 from app.models.metrica import MetricaNodeModel
 from app.models.alerta import AlertaModel
+from app.models.zona import ZonaModel
 from app.schemas.metrica import MetricaNodeCreate, MetricasClusterResponse, ClusterMetricsSummary
+from app.schemas.zona import ZonaSincronizada
 from app.metrics_helpers import build_metrics_by_day
 
 # Garante que as tabelas são criadas na base de dados principal (Master)
@@ -71,6 +73,43 @@ def sync_alerta_from_edge(alerta: AlertaSincronizado, db: Session = Depends(get_
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Erro na injeção: {str(e)}")
+
+# ============ ENDPOINTS DE ZONAS (GRAB EVENTS) ============
+
+# ESCRITA -> Master
+@app.post("/api/zonas/sincronizar")
+def sync_zona_from_edge(zona: ZonaSincronizada, db: Session = Depends(get_db_master)):
+    try:
+        nova_zona = ZonaModel(
+            track_id=zona.track_id,
+            zone_id=zona.zone_id,
+            zone_name=zona.zone_name,
+            hand=zona.hand,
+            deceleration_ratio=zona.deceleration_ratio,
+            arm_flex_ratio=zona.arm_flex_ratio,
+            arm_length=zona.arm_length,
+            timestamp=datetime.fromisoformat(zona.timestamp.replace('Z', '+00:00')) if isinstance(zona.timestamp, str) else zona.timestamp
+        )
+        db.add(nova_zona)
+        db.commit()
+        return {"status": "sucesso", "mensagem": "Evento de zona gravado na Cloud."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro na injeção: {str(e)}")
+
+# LEITURA -> Réplica
+@app.get("/api/zonas/recentes")
+def get_recent_zones(db: Session = Depends(get_db_replica)):
+    try:
+        zonas_recentes = db.query(ZonaModel).order_by(ZonaModel.timestamp.desc()).limit(10).all()
+        return {"zonas": zonas_recentes}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler histórico: {str(e)}")
+    
+@app.get("/api/teste")
+def get_test():
+    return {"teste": "A API está a funcionar corretamente com separação de tráfego!"}
+    
     
 
 @app.post("/api/admin/reset-db")

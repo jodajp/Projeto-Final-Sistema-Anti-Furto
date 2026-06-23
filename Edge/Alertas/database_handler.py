@@ -3,6 +3,7 @@ import os
 import threading
 import time
 import requests
+from datetime import datetime
 
 DIR_ATUAL = os.path.dirname(os.path.abspath(__file__))
 PASTA_EDGE = os.path.dirname(DIR_ATUAL) 
@@ -11,6 +12,7 @@ DB_PATH = os.path.join(PASTA_EDGE, "dados_oficial.db")
 # URLs DA TUA NUVEM (API)
 CLOUD_API_ALERTAS = "http://20.251.152.37:8000/api/alertas/sincronizar"
 CLOUD_API_METRICAS = "http://20.251.152.37:8000/api/metricas/registar"
+CLOUD_API_ZONAS = "http://20.251.152.37:8000/api/zonas/sincronizar"
 
 class DatabaseHandler:
     def __init__(self):
@@ -48,14 +50,15 @@ class DatabaseHandler:
         """)
 
         self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS zone_events (
+            CREATE TABLE IF NOT EXISTS zones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 track_id INTEGER,
                 zone_id INTEGER,
                 zone_name TEXT,
                 hand TEXT,
-                x REAL,
-                y REAL,
+                deceleration_ratio REAL,
+                arm_flex_ratio REAL,
+                arm_length REAL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 sincronizado INTEGER DEFAULT 0
             )
@@ -103,14 +106,14 @@ class DatabaseHandler:
         except Exception as e:
             print(f"[Edge DB] Erro a guardar métrica local: {e}")
 
-    def salvar_evento_zona(self, track_id, zone_id, zone_name, hand, x, y, timestamp=None):
-        """Guarda um evento de zona do braço no Edge."""
+    def salvar_evento_zona(self, track_id, zone_id, zone_name, hand, deceleration_ratio, arm_flex_ratio, arm_length, timestamp=None):
+        """Guarda um evento de zona (grab) no Edge."""
         try:
             self.cursor.execute("""
-                INSERT INTO zone_events (
-                    track_id, zone_id, zone_name, hand, x, y, timestamp, sincronizado
-                ) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), 0)
-            """, (track_id, zone_id, zone_name, hand, x, y, timestamp))
+                INSERT INTO zones (
+                    track_id, zone_id, zone_name, hand, deceleration_ratio, arm_flex_ratio, arm_length, timestamp, sincronizado
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), 0)
+            """, (track_id, zone_id, zone_name, hand, deceleration_ratio, arm_flex_ratio, arm_length, timestamp))
             self.conn.commit()
         except Exception as e:
             print(f"[Edge DB] Erro a guardar evento de zona local: {e}")
@@ -167,6 +170,58 @@ class DatabaseHandler:
                     sync_cursor.execute("UPDATE metricas SET sincronizado = 1 WHERE id = ?", (db_id,))
                     sync_conn.commit()
                     print(f" -> [Cloud] Métrica {db_id} sincronizada!")
+
+            # 3. EVENTOS DE ZONES
+            sync_cursor.execute("""
+                SELECT id, track_id, zone_id, zone_name, hand, deceleration_ratio, arm_flex_ratio, arm_length, timestamp 
+                FROM zones WHERE sincronizado = 0
+            """)
+            grabs = sync_cursor.fetchall()
+            if grabs:
+                print(f"[Sync] {len(grabs)} eventos de Zones pendentes para sincronizar")
+                
+            for zone_event in grabs:
+                db_id, track_id, zone_id, zone_name, hand, decel, flex, arm_len, ts = zone_event
+                
+                try:
+                    # Tenta converter o número "feio" para uma data ISO "bonita" que a Cloud aceita
+                    try:
+                        ts_iso = datetime.fromtimestamp(float(ts)).isoformat()
+                    except (ValueError, TypeError):
+                        ts_iso = str(ts) # Fallback de segurança
+
+                    payload_zone = {
+                        "track_id": int(track_id),
+                        "zone_id": int(zone_id),
+                        "zone_name": str(zone_name),
+                        "hand": str(hand),
+                        "deceleration_ratio": float(decel) if decel is not None else 0.0,
+                        "arm_flex_ratio": float(flex) if flex is not None else 0.0,
+                        "arm_length": float(arm_len) if arm_len is not None else 0.0,
+                        "timestamp": ts_iso  # <--- A magia acontece aqui!
+                    }
+                    
+                    resp = requests.post(CLOUD_API_ZONAS, json=payload_zone, timeout=3.0)
+                    
+                    if resp.status_code == 200:
+                        sync_cursor.execute("UPDATE zones SET sincronizado = 1 WHERE id = ?", (db_id,))
+                        sync_conn.commit()
+                        print(f" -> [Cloud] Evento Zone {db_id} sincronizado!")
+                    else:
+                        # O SEGREDO ESTÁ AQUI: Vai mostrar o motivo da Cloud rejeitar os dados
+                        print(f" [!] Cloud rejeitou Zone {db_id}. Status: {resp.status_code} | Detalhe: {resp.text}")
+                        
+                        # Opcional: Se quiseres que ele pare de tentar enviar dados corrompidos para sempre,
+                        # podes descomentar as duas linhas abaixo:
+                        # sync_cursor.execute("UPDATE zones SET sincronizado = 1 WHERE id = ?", (db_id,))
+                        # sync_conn.commit()
+
+                except (ValueError, TypeError) as e:
+                    print(f" [!] Erro ao serializar Evento Zone {db_id}: {e} - marcando como sincronizado")
+                    sync_cursor.execute("UPDATE zones SET sincronizado = 1 WHERE id = ?", (db_id,))
+                    sync_conn.commit()
+                except requests.exceptions.RequestException as e:
+                    print(f" [!] Erro na requisição Evento Zone {db_id}: {e}")
 
             sync_conn.close()
             

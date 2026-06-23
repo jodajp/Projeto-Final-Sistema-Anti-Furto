@@ -77,9 +77,10 @@ zone_tracking:
   enabled: false
   draw_zones: true
   grab_detection_enabled: true
-  min_hold_frames: 12
-  max_hand_speed: 4.0
-  max_relative_hand_speed: 3.0
+  min_hold_frames: 10
+  entry_speed_threshold: 5.0
+  arm_flex_threshold: 0.85
+  deceleration_threshold: 0.5
   zones:
     - id: 1
       name: Zona 1
