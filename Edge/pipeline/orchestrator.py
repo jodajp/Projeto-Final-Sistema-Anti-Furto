@@ -121,9 +121,13 @@ class AntiTheftOrchestrator:
 
         # Configuração de saída
         camera_cfg = config.camera()
+        viz_cfg = self.config.get('visualization', {})
         self.output_width = int(camera_cfg.get('width', 640))
         self.output_height = int(camera_cfg.get('height', 480))
         self.output_size = (self.output_width, self.output_height)
+        
+        self.max_display_width = int(viz_cfg.get('max_display_width', 1280))
+        self.max_display_height = int(viz_cfg.get('max_display_height', 850))
 
     @staticmethod
     def _resolve_node_id() -> str:
@@ -255,6 +259,18 @@ class AntiTheftOrchestrator:
 
         return [x1, y1, x2, y2, float(np.mean(scores[valid_mask])), 0.0] if x2 > x1 and y2 > y1 else None
 
+    def _scale_zone_rect(self, rect):
+        """Escala as coordenadas da zona do config (assumindo base 640x480) para a resolucao real do frame."""
+        x1, y1, x2, y2 = rect
+        base_w = float(self.config.camera().get('width', 640))
+        base_h = float(self.config.camera().get('height', 480))
+        
+        cur_w, cur_h = getattr(self, 'current_frame_size', (base_w, base_h))
+        
+        sx = cur_w / base_w
+        sy = cur_h / base_h
+        return int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy)
+
     def _draw_zones(self, frame):
         if not self.draw_zones_enabled or not self.zone_tracking_enabled or not self.zones:
             return
@@ -264,7 +280,7 @@ class AntiTheftOrchestrator:
             rect = zone.get('rect')
             if not rect or len(rect) != 4:
                 continue
-            x1, y1, x2, y2 = map(int, rect)
+            x1, y1, x2, y2 = self._scale_zone_rect(rect)
             color = tuple(int(c) for c in zone.get('color', [0, 255, 255]))
             cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
             cv2.putText(overlay, zone.get('name', f"Zona {zone.get('id', '?')}"),
@@ -277,7 +293,7 @@ class AntiTheftOrchestrator:
             rect = zone.get('rect')
             if not rect or len(rect) != 4:
                 continue
-            x1, y1, x2, y2 = map(int, rect)
+            x1, y1, x2, y2 = self._scale_zone_rect(rect)
             border_color = tuple(min(255, int(c * 1.2)) for c in zone.get('color', [0, 255, 255]))
             cv2.rectangle(frame, (x1, y1), (x2, y2), border_color, 2)
 
@@ -286,7 +302,7 @@ class AntiTheftOrchestrator:
             rect = zone.get('rect')
             if not rect or len(rect) != 4:
                 continue
-            x1, y1, x2, y2 = map(int, rect)
+            x1, y1, x2, y2 = self._scale_zone_rect(rect)
             if x1 <= x <= x2 and y1 <= y <= y2:
                 return zone
         return None
@@ -590,6 +606,24 @@ class AntiTheftOrchestrator:
             grid[y1:y1 + cell_size, x1:x1 + cell_size] = cv2.resize(canvas, (cell_size, cell_size))
         return grid
 
+    def _resize_to_fit(self, img):
+        """Redimensiona uma imagem mantendo o aspect ratio para caber perfeitamente no ecrã."""
+        if img is None:
+            return None
+        orig_h, orig_w = img.shape[:2]
+        
+        # Obter resolução máxima de visualização (fallback seguro)
+        max_w = getattr(self, 'max_display_width', 1280)
+        max_h = getattr(self, 'max_display_height', 850)
+        
+        escala = min(max_w / orig_w, max_h / orig_h)
+        nova_largura = int(orig_w * escala)
+        nova_altura = int(orig_h * escala)
+        
+        # Usa interpolacao correta dependendo se estamos a aumentar ou diminuir a imagem
+        interp = cv2.INTER_AREA if escala < 1.0 else cv2.INTER_LINEAR
+        return cv2.resize(img, (nova_largura, nova_altura), interpolation=interp)
+
     def run(self):
         self._print_startup()
         cap = self.video_source.open()
@@ -598,14 +632,12 @@ class AntiTheftOrchestrator:
                 ret, frame = cap.read()
                 if not ret:
                     break
+                
+                self.current_frame_size = (frame.shape[1], frame.shape[0])
 
                 if self.metrics.frame_count == 0:
                     print(f"[VIDEO] Resolucao Real: {frame.shape[1]}x{frame.shape[0]}")
-                    if (frame.shape[1], frame.shape[0]) != self.output_size:
-                        print(f"[VIDEO] Forçando resolução de exibição para {self.output_width}x{self.output_height}")
 
-                if (frame.shape[1], frame.shape[0]) != self.output_size:
-                    frame = cv2.resize(frame, self.output_size, interpolation=cv2.INTER_LINEAR)
 
                 self.metrics.on_frame()
                 timestamp = time.time()
@@ -655,12 +687,13 @@ class AntiTheftOrchestrator:
                     self._guardar_frame_web(output)
                     self.ultimo_frame_web = self.metrics.frame_count
 
-                cv2.imshow(self.renderer.window_name, output)
+                # Redimensionar e exibir janelas mantendo aspect ratio
+                cv2.imshow(self.renderer.window_name, self._resize_to_fit(output))
 
                 sk_canvas = getattr(self.renderer, 'last_canvas', None)
                 if sk_canvas is not None:
                     try:
-                        cv2.imshow(self.renderer.window_name + ' - SKELETON', sk_canvas)
+                        cv2.imshow(self.renderer.window_name + ' - SKELETON', self._resize_to_fit(sk_canvas))
                     except Exception:
                         pass
 
@@ -668,7 +701,7 @@ class AntiTheftOrchestrator:
                     normalized_canvas = self._render_normalized_canvas(entidades)
                     if normalized_canvas is not None:
                         try:
-                            cv2.imshow(self.renderer.window_name + ' - NORMALIZED', normalized_canvas)
+                            cv2.imshow(self.renderer.window_name + ' - NORMALIZED', self._resize_to_fit(normalized_canvas))
                         except Exception:
                             pass
 

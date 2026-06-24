@@ -122,7 +122,7 @@ class SkeletonVisualizer:
             )
         
         # ===== Scale normalized coordinates to pixel space =====
-        kpts_px = self._normalize_to_pixels(normalized_keypoints)
+        kpts_px = self._normalize_to_pixels(normalized_keypoints, scores)
         
         # ===== Draw skeleton connections =====
         for idx_from, idx_to in SKELETON_CONNECTIONS:
@@ -135,6 +135,9 @@ class SkeletonVisualizer:
             
             # Confidence-weighted line thickness (fade weak connections)
             conf_avg = (scores[idx_from] + scores[idx_to]) / 2.0
+            if conf_avg < 0.1:
+                continue
+
             line_thickness = max(1, int(self.line_thickness * conf_avg))
             
             pt_from_int = tuple(map(int, pt_from))
@@ -153,7 +156,7 @@ class SkeletonVisualizer:
         for idx in range(17):
             pt = kpts_px[idx]
             
-            if np.isnan(pt).any():
+            if np.isnan(pt).any() or scores[idx] < 0.1:
                 continue
             
             pt_int = tuple(map(int, pt))
@@ -210,7 +213,7 @@ class SkeletonVisualizer:
                 )
         
         # Draw origin marker (pelvis should be near center for normalized poses)
-        origin_px = self._normalize_to_pixels(np.array([[0.0, 0.0]]))[0]
+        origin_px = self._normalize_to_pixels(np.array([[0.0, 0.0]]), np.array([1.0]))[0]
         if not np.isnan(origin_px).any():
             origin_px_int = tuple(map(int, origin_px))
             cv2.drawMarker(
@@ -224,7 +227,7 @@ class SkeletonVisualizer:
         
         return canvas
     
-    def _normalize_to_pixels(self, norm_coords: np.ndarray) -> np.ndarray:
+    def _normalize_to_pixels(self, norm_coords: np.ndarray, scores: np.ndarray) -> np.ndarray:
         """
         Convert normalized coordinates to pixel space.
         
@@ -233,13 +236,16 @@ class SkeletonVisualizer:
         
         Args:
             norm_coords: Shape (N, 2), normalized coordinates
+            scores: Shape (N,), confidence scores
         
         Returns:
             Pixel coordinates, shape (N, 2), clamped to canvas bounds
         """
-        valid_mask = ~np.isnan(norm_coords).any(axis=1)
+        valid_mask = (~np.isnan(norm_coords).any(axis=1)) & (scores > 0.1)
         if not valid_mask.any():
-            return np.full_like(norm_coords, np.nan)
+            valid_mask = ~np.isnan(norm_coords).any(axis=1)
+            if not valid_mask.any():
+                return np.full_like(norm_coords, np.nan)
         
         valid_coords = norm_coords[valid_mask]
         x_min, x_max = valid_coords[:, 0].min(), valid_coords[:, 0].max()
@@ -256,6 +262,15 @@ class SkeletonVisualizer:
         px_coords[:, 0] = (norm_coords[:, 0] - x_min) * scale + self.margin_px
         px_coords[:, 1] = (norm_coords[:, 1] - y_min) * scale + self.margin_px
         
+        # Center the skeleton in the canvas
+        current_w = (x_max - x_min) * scale
+        current_h = (y_max - y_min) * scale
+        offset_x = (self.canvas_size - 2 * self.margin_px - current_w) / 2
+        offset_y = (self.canvas_size - 2 * self.margin_px - current_h) / 2
+        
+        px_coords[:, 0] += offset_x
+        px_coords[:, 1] += offset_y
+        
         px_coords = np.clip(px_coords, 0, self.canvas_size - 1)
-        px_coords[~valid_mask] = np.nan
+        # We don't NaN out invalid coords because we still want to draw lines to them if they exist
         return px_coords

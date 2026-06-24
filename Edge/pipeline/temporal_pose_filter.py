@@ -48,7 +48,7 @@ class AdaptiveFilterState:
 
 class TemporalPoseFilter:
     """
-    Production temporal filter for 17-point COCO skeleton with skeletal constraints.
+    Temporal filter for 17-point COCO skeleton with skeletal constraints.
     
     Smart filtering: visible keypoints are smoothed directly (no prediction),
     occluded keypoints are predicted with momentum and damping.
@@ -124,19 +124,40 @@ class TemporalPoseFilter:
         diffs = keypoints[self.limb_pairs_arr[:, 1]] - keypoints[self.limb_pairs_arr[:, 0]]
         return np.linalg.norm(diffs, axis=1)
 
+    def _get_person_scale(self, keypoints: np.ndarray) -> float:
+        """
+        Estimate the current pixel scale of the person using robust anatomical anchors.
+        This handles 3D foreshortening by taking the max of width and height anchors.
+        """
+        # Neck: midpoint of shoulders
+        neck = (keypoints[LEFT_SHOULDER] + keypoints[RIGHT_SHOULDER]) * 0.5
+        # Pelvis: midpoint of hips
+        pelvis = (keypoints[LEFT_HIP] + keypoints[RIGHT_HIP]) * 0.5
+        
+        torso_len = float(np.linalg.norm(neck - pelvis))
+        shoulder_width = float(np.linalg.norm(keypoints[LEFT_SHOULDER] - keypoints[RIGHT_SHOULDER]))
+        hip_width = float(np.linalg.norm(keypoints[LEFT_HIP] - keypoints[RIGHT_HIP]))
+        
+        # Take the maximum to ensure stability even if the person bends forward (torso_len -> 0)
+        # or turns sideways (shoulder_width -> 0).
+        return max(torso_len, shoulder_width * 1.5, hip_width * 1.5, 30.0)
+
     def _check_limb_stretching(self, keypoints: np.ndarray) -> np.ndarray:
         """
         Detect impossible limb stretches (size changes).
         Returns: affected_keypoints_mask (17,) bool
         """
-        if self.state.baseline_limb_lengths is None:
-            return np.zeros(17, dtype=bool)
-
+        person_scale = self._get_person_scale(keypoints)
         current_lengths = self._compute_limb_lengths(keypoints)
-        stretch_ratios = current_lengths / (self.state.baseline_limb_lengths + 1e-8)
-
-        anomalous_limbs = stretch_ratios > self.limb_stretch_threshold
+        
+        # Max reasonable length for a single limb segment (upper arm, forearm, etc.)
+        # relative to the person's torso/width. 
+        # Legs are longer, so we use 2.0x scale as the absolute limit for ANY limb.
+        max_allowed = person_scale * 2.0
+        
+        anomalous_limbs = current_lengths > max_allowed
         affected_keypoints = np.zeros(17, dtype=bool)
+        
         if np.any(anomalous_limbs):
             bad_indices = self.limb_pairs_arr[anomalous_limbs].flatten()
             affected_keypoints[bad_indices] = True
@@ -175,14 +196,10 @@ class TemporalPoseFilter:
             alpha = self.smoothing_factor_fast
 
         # Skeletal constraint violation → aggressive smoothing.
-        # Angle spikes are still tracked for diagnostics, but we do not let them
-        # slow down normal motion because that creates visible lag.
         if affected_by_stretch:
             alpha = max(0.2, alpha - 0.3)  # Use much stronger smoothing
 
         # Head tracking uses a motion-aware policy:
-        # keep it stable when motion is slow, but prioritize responsiveness when the
-        # whole body is moving quickly so the head does not trail behind.
         if self._is_head_keypoint(keypoint_idx):
             if velocity_magnitude > self.head_rapid_movement_threshold:
                 alpha = max(alpha, self.head_smoothing_factor_fast)
@@ -202,23 +219,28 @@ class TemporalPoseFilter:
         This prevents a single lost wrist/elbow from drifting away without adding
         a full reconstruction pass.
         """
-        if self.state.baseline_limb_lengths is None:
-            return filtered_position, filtered_scores, was_predicted, np.zeros(17, dtype=bool)
-
+        person_scale = self._get_person_scale(filtered_position)
         violation_mask = np.zeros(17, dtype=bool)
+        
+        # We check all 8 DEFAULT_LIMBS, but the config specifies "arm_extension". 
+        # We'll check the first 4 (arms) and clamp them to 1.5x scale.
         for limb_idx in range(4):
             parent, child = self.LIMB_PAIRS[limb_idx]
-            baseline_length = self.state.baseline_limb_lengths[limb_idx]
             current_vec = filtered_position[child] - filtered_position[parent]
             current_length = float(np.linalg.norm(current_vec))
 
             if current_length <= 1e-6:
                 continue
 
-            max_length = baseline_length * self.limb_stretch_threshold
+            # Arms shouldn't exceed 1.5x the torso/shoulder width
+            max_length = person_scale * 1.5
+            
             if current_length > max_length:
+                # Clamp the child position to the max radius
                 filtered_position[child] = filtered_position[parent] + (current_vec / current_length) * max_length
-                filtered_scores[child] = 0.0
+                
+                # Penalize confidence aggressively because it drifted
+                filtered_scores[child] = max(0.0, filtered_scores[child] - 0.5)
                 was_predicted[child] = False
                 violation_mask[parent] = True
                 violation_mask[child] = True
