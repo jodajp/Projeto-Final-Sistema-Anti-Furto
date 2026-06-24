@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.metrica import MetricaNodeModel
+from app.models.zona import ZonaModel
 
 
 def build_metrics_by_day(day: Optional[str], db: Session):
@@ -35,6 +36,50 @@ def build_metrics_by_day(day: Optional[str], db: Session):
             "counts": hours,
             "max_count": max(hours) if hours else 0,
             "rows_queried": len(rows),
+            "timestamp": datetime.now().isoformat()
+        }
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato de data inválido. Use YYYY-MM-DD.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def build_zone_stats_by_day(day: Optional[str], db: Session):
+    try:
+        # 1. Definir o intervalo de tempo
+        if day:
+            target_date = datetime.strptime(day, "%Y-%m-%d").date()
+        else:
+            target_date = datetime.now().date()
+
+        start = datetime.combine(target_date, datetime.min.time())
+        end = datetime.combine(target_date, datetime.max.time())
+
+        # 2. Query agrupada por nome da zona
+        resultados = db.query(
+            ZonaModel.zone_name,
+            func.count(ZonaModel.id).label('total_acessos')
+        ).filter(
+            ZonaModel.timestamp >= start,
+            ZonaModel.timestamp <= end
+        ).group_by(
+            ZonaModel.zone_name
+        ).order_by(
+            func.count(ZonaModel.id).desc()
+        ).all()
+
+        # 3. Formatar os dados para o Frontend
+        labels = []
+        counts = []
+        for row in resultados:
+            labels.append(row.zone_name)
+            counts.append(row.total_acessos)
+
+        return {
+            "day": target_date.isoformat(),
+            "labels": labels,
+            "counts": counts,
+            "total_events": sum(counts),
             "timestamp": datetime.now().isoformat()
         }
     except ValueError:

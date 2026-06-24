@@ -17,7 +17,7 @@ from app.models.alerta import AlertaModel
 from app.models.zona import ZonaModel
 from app.schemas.metrica import MetricaNodeCreate, MetricasClusterResponse, ClusterMetricsSummary
 from app.schemas.zona import ZonaSincronizada
-from app.metrics_helpers import build_metrics_by_day
+from app.metrics_helpers import build_metrics_by_day, build_zone_stats_by_day
 
 # Garante que as tabelas são criadas na base de dados principal (Master)
 Base.metadata.create_all(bind=engine_master)
@@ -105,11 +105,6 @@ def get_recent_zones(db: Session = Depends(get_db_replica)):
         return {"zonas": zonas_recentes}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao ler histórico: {str(e)}")
-    
-@app.get("/api/teste")
-def get_test():
-    return {"teste": "A API está a funcionar corretamente com separação de tráfego!"}
-    
     
 
 @app.post("/api/admin/reset-db")
@@ -228,6 +223,14 @@ def get_metrics_by_day(day: Optional[str] = None, db: Session = Depends(get_db_r
 @app.get("/api/estatisticas/horas/{day}")
 def get_metrics_by_day_path(day: str, db: Session = Depends(get_db_replica)):
     return build_metrics_by_day(day, db)
+
+@app.get("/api/estatisticas/zonas")
+def get_zone_stats_by_day(day: Optional[str] = None, db: Session = Depends(get_db_replica)):
+    return build_zone_stats_by_day(day, db)
+
+@app.get("/api/estatisticas/zonas/{day}")
+def get_zone_stats_by_day_path(day: str, db: Session = Depends(get_db_replica)):
+    return build_zone_stats_by_day(day, db)
 
 # ============ ENDPOINTS DE VÍDEO ============
 @app.get("/api/video/frame")
