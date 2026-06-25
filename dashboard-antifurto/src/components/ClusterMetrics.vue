@@ -215,14 +215,13 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { API_BASE, API_URL } from '../utils/api.js'
 
 const apiConnected = ref(false)
 const isLoading = ref(true)
 const clusterMetrics = ref({})
 const nodes = ref([])
 let fetchInterval = null
-
-const API_URL = 'http://projeto-antifurto-vm1.norwayeast.cloudapp.azure.com:8000/api/metricas/cluster'
 
 const formatUptime = (seconds) => {
   if (!seconds) return '0s'
@@ -284,8 +283,8 @@ const infraServices = ref([])
 const infraNodes = ref([])
 const infraError = ref(null)
 
-const INFRA_API_URL = 'http://20.251.152.37:8000/api/infra/services' 
-const NODES_API_URL = 'http://20.251.152.37:8000/api/infra/nodes'
+const INFRA_API_URL = `${API_BASE}/infra/services`
+const NODES_API_URL = `${API_BASE}/infra/nodes`
 
 const fetchInfraStatus = async () => {
   try {

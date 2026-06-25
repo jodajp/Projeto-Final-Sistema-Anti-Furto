@@ -3,6 +3,9 @@ import cv2
 import numpy as np
 import os
 import socket
+import queue
+import threading
+import requests
 from datetime import datetime
 from pathlib import Path
 
@@ -97,9 +100,15 @@ class AntiTheftOrchestrator:
         self.ultimo_frame_metricas = 0
 
         # Frame web para stream
+        # TODO: LIMPAR ESTE CÓDIGO E REMOVER ESTAS VARIAVEIS
         self.frame_web_intervalo = 10
         self.ultimo_frame_web = 0
         self.frame_web_path = os.path.join(self.metricas_dir, 'last_frame.jpg')
+
+        # Uploader de frames em segundo plano para a API
+        self.frame_queue = queue.Queue(maxsize=1)
+        self.uploader_thread = threading.Thread(target=self._frame_uploader_loop, daemon=True)
+        self.uploader_thread.start()
 
         # Configuração de zonas de prateleira
         zone_cfg = self.config.data.get('zone_tracking', {})
@@ -208,7 +217,7 @@ class AntiTheftOrchestrator:
             print(f"[ERRO] Falha ao enviar metrica para o cofre local: {str(e)}")
 
     def _guardar_frame_web(self, frame):
-        """Guarda o último frame processado para stream web."""
+        """Guarda o último frame processado para stream web e coloca na fila de upload."""
         try:
             altura, largura = frame.shape[:2]
             if largura > 1280:
@@ -216,9 +225,56 @@ class AntiTheftOrchestrator:
                 frame_redimensionado = cv2.resize(frame, (1280, int(altura * escala)))
             else:
                 frame_redimensionado = frame
-            cv2.imwrite(self.frame_web_path, frame_redimensionado, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            
+            # Codifica em JPEG em memória
+            success, encoded_image = cv2.imencode('.jpg', frame_redimensionado, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if success:
+                jpeg_bytes = encoded_image.tobytes()
+                # Tenta colocar na fila (se cheia, retira o anterior para manter sempre o mais fresco)
+                try:
+                    self.frame_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                self.frame_queue.put_nowait(jpeg_bytes)
+
+            api_url = self.runtime_config.get("api_url", "")
+
+            # TODO: Repensar se vale a pena
+            # Só grava em disco se não houver uploader ativo
+            if not api_url:
+                cv2.imwrite(self.frame_web_path, frame_redimensionado, [cv2.IMWRITE_JPEG_QUALITY, 80])
         except Exception as e:
             print(f"[AVISO] Falha ao guardar frame web: {str(e)}")
+
+    def _frame_uploader_loop(self):
+        """Loop executado em segundo plano para fazer upload dos frames via POST HTTP"""
+        api_url = self.runtime_config.get("api_url", "").strip()
+        if not api_url:
+            print("[UPLOADER] API URL não configurada. Upload de frames desativado.")
+            return
+
+        print(f"[UPLOADER] Iniciado uploader para o nó '{self.node_id}' -> {api_url}")
+        upload_url = f"{api_url}/api/video/upload/{self.node_id}"
+
+        while True:
+            try:
+                frame_data = self.frame_queue.get()
+                if frame_data is None:
+                    break
+
+                try:
+                    # Envia como corpo binário (raw data)
+                    requests.post(
+                        upload_url, 
+                        data=frame_data, 
+                        headers={"Content-Type": "image/jpeg"}, 
+                        timeout=2.0
+                    )
+                except Exception:
+                    # Falhas de rede são silenciosas para não inundar a consola
+                    pass
+            except Exception as e:
+                time.sleep(1)
 
     @staticmethod
     def _box_iou(box_a, box_b):

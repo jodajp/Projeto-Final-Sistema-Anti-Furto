@@ -114,6 +114,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { API_BASE } from '../utils/api.js'
 
 const selectedDay = ref(new Date().toISOString().slice(0, 10))
 const loading = ref(false)
@@ -132,7 +133,6 @@ const zoneCounts = ref([])
 const zoneTotalEvents = ref(0)
 const zoneErrorMessage = ref('')
 
-const API_BASE = 'http://20.251.152.37:8000/api'
 const HOURLY_URL = `${API_BASE}/estatisticas/horas`
 const ZONES_URL = `${API_BASE}/estatisticas/zonas`
 

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
@@ -9,6 +9,12 @@ import os
 from pathlib import Path
 from pydantic import BaseModel
 import httpx
+import asyncio
+
+# In-memory stores for Edge camera frames
+# Key: node_id (str), Value: frame_bytes (bytes)
+latest_node_frames = {}
+latest_frame_timestamps = {}
 
 # Importações corretas com o Splitting de Leitura/Escrita
 from app.database import engine_master, Base, get_db_master, get_db_replica
@@ -233,25 +239,64 @@ def get_zone_stats_by_day_path(day: str, db: Session = Depends(get_db_replica)):
     return build_zone_stats_by_day(day, db)
 
 # ============ ENDPOINTS DE VÍDEO ============
+@app.post("/api/video/upload/{node_id}")
+async def upload_video_frame(node_id: str, request: Request):
+    """Permite aos nós Edge enviar frames processados em direto em memória"""
+    frame_data = await request.body()
+    latest_node_frames[node_id] = frame_data
+    latest_frame_timestamps[node_id] = datetime.now()
+    return {"status": "sucesso", "node_id": node_id}
+
+@app.get("/api/video/active_streams")
+def get_active_streams():
+    """Retorna os IDs dos nós com transmissões de vídeo ativas nos últimos 15 segundos"""
+    now = datetime.now()
+    active = []
+    # Limpa transmissões inativas ao mesmo tempo para poupar memória
+    for node_id, ts in list(latest_frame_timestamps.items()):
+        if (now - ts).total_seconds() < 15.0:
+            active.append(node_id)
+        else:
+            latest_node_frames.pop(node_id, None)
+            latest_frame_timestamps.pop(node_id, None)
+    return {"active_streams": active}
+
 @app.get("/api/video/frame")
-def get_current_frame():
+def get_current_frame(node_id: Optional[str] = None):
+    # Se node_id for fornecido e estiver em memória
+    if node_id and node_id in latest_node_frames:
+        return Response(content=latest_node_frames[node_id], media_type="image/jpeg")
+    
+    # Se nenhum for fornecido mas houver em memória, pega o primeiro
+    if not node_id and latest_node_frames:
+        first_node_id = list(latest_node_frames.keys())[0]
+        return Response(content=latest_node_frames[first_node_id], media_type="image/jpeg")
+
+    # Fallback para o frame em disco
     frame_path = os.path.join(METRICAS_DIR, 'last_frame.jpg')
     if not os.path.exists(frame_path):
         return {"erro": "Nenhum frame disponível"}
     return FileResponse(frame_path, media_type="image/jpeg")
 
 @app.get("/api/video/stream")
-def get_video_stream():
-    frame_path = os.path.join(METRICAS_DIR, 'last_frame.jpg')
-    def frame_generator():
-        import time
+def get_video_stream(node_id: Optional[str] = None):
+    async def frame_generator():
+        frame_path = os.path.join(METRICAS_DIR, 'last_frame.jpg')
         while True:
             try:
-                if os.path.exists(frame_path):
+                target_node = node_id
+                if not target_node and latest_node_frames:
+                    target_node = list(latest_node_frames.keys())[0]
+
+                if target_node and target_node in latest_node_frames:
+                    frame_data = latest_node_frames[target_node]
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' + str(len(frame_data)).encode() + b'\r\n\r\n' + frame_data + b'\r\n')
+                elif os.path.exists(frame_path):
                     with open(frame_path, 'rb') as f:
                         frame_data = f.read()
                     yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' + str(len(frame_data)).encode() + b'\r\n\r\n' + frame_data + b'\r\n')
-                time.sleep(0.067)
+                
+                await asyncio.sleep(0.08) # ~12 fps, excelente compromisso entre fluidez e performance de CPU/Largura de Banda
             except Exception:
                 break
     return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")

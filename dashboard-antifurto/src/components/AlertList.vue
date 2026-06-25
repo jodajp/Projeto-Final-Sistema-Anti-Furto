@@ -70,13 +70,12 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { API_BASE } from '../utils/api.js'
 
 const alerts = ref([])
 const metrics = ref([])
 const loading = ref(true)
 let fetchInterval = null
-
-const API_BASE = 'http://20.251.152.37:8000/api'
 
 const fetchHistoricoCompleto = async () => {
   try {

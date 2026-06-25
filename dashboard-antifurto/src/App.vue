@@ -76,14 +76,13 @@ import Estatisticas from './components/Estatisticas.vue'
 // IMPORTS DAS NOVAS PÁGINAS QUE ESTAVAM EM FALTA:
 import LoginView from './components/LoginView.vue'
 import SignUpView from './components/SignUpView.vue'
+import { API_URL } from './utils/api.js'
 
 const currentView = ref('dashboard')
 const apiConnected = ref(false)
 const isLoading = ref(true)
 const alertList = ref([])
 let fetchInterval = null
-
-const API_URL = 'http://projeto-antifurto-vm1.norwayeast.cloudapp.azure.com:8000/api/metricas/cluster'
 
 const fetchAlerts = async () => {
   try {
