@@ -69,18 +69,26 @@ def run_pytorch_inference(model, features: np.ndarray, device: str = "cpu") -> n
     return probs
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Model Benchmarking Script")
+    parser.add_argument("--onnx-path", type=str, default=None)
+    parser.add_argument("--report-path", type=str, default=None)
+    parser.add_argument("--pth-path", type=str, default=None)
+    parser.add_argument("--smooth", action="store_true", help="Use smoothing window of 5, require 3 hits")
+    args = parser.parse_args()
+
     print("=" * 60)
     print("           ANTI-THEFT SYSTEM: MODEL BENCHMARK           ")
     print("=" * 60)
     
     # 1. Load Calibration Report & Config
-    report_path = EDGE_DIR / "models" / "phase4_experiment_report.json"
+    report_path = Path(args.report_path) if args.report_path else EDGE_DIR / "models" / "phase4_experiment_report.json"
     config_path = EDGE_DIR / "config.yaml"
     
     threshold = 0.40  # Default fallback
     sequence_length = 45
-    onnx_path = EDGE_DIR / "models" / "phase4_experiment_model.onnx"
-    pth_path = EDGE_DIR / "models" / "phase4_experiment_model.pth"
+    onnx_path = Path(args.onnx_path) if args.onnx_path else EDGE_DIR / "models" / "phase4_experiment_model.onnx"
+    pth_path = Path(args.pth_path) if args.pth_path else EDGE_DIR / "models" / "phase4_experiment_model.pth"
     
     if report_path.exists():
         try:
@@ -201,7 +209,16 @@ def main():
             probs = run_pytorch_inference(py_model, features)
             
         max_prob = float(np.max(probs)) if len(probs) > 0 else 0.0
-        predicted_label = 1 if max_prob >= threshold else 0
+        if args.smooth:
+            predicted_label = 0
+            for i in range(len(probs)):
+                window_probs = probs[max(0, i-4):i+1]
+                hits = sum(1 for p in window_probs if p >= threshold)
+                if hits >= 3:
+                    predicted_label = 1
+                    break
+        else:
+            predicted_label = 1 if max_prob >= threshold else 0
         
         y_true.append(true_label)
         y_pred.append(predicted_label)

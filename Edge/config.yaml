@@ -26,13 +26,13 @@ detector:
     use_gpu: true
 
 activities:
-  - enabled: false
+  - enabled: true
     plugin: Atividades_Suspeitas.shoplifting_detector:ShopliftingActivityDetector
     params:
       model_path: ./models/phase4_experiment_model.onnx
-      seq_length: 45
-      threshold: 0.50
-      cooldown_frames: 45
+      seq_length: 60
+      threshold: 0.35
+      cooldown_frames: 60
   - enabled: false
     plugin: Atividades_Suspeitas.velocity_detector:VelocityDetector
     params:
@@ -149,12 +149,12 @@ spatial_normalization:
 
 # Phase 4: sequence classification (shoplifting vs normal)
 phase4:
-  sequence_length: 45
+  sequence_length: 60
   input_size: 60
   hidden_size: 128
-  num_layers: 1
+  num_layers: 2
   attention_size: 64
-  dropout: 0.1
+  dropout: 0.2
   learning_rate: 0.001
   batch_size: 16
   epochs: 30
