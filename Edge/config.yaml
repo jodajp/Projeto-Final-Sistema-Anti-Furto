@@ -86,23 +86,23 @@ zone_tracking:
   zones:
     - id: 1
       name: Zona 1
-      rect: [200, 30, 480, 80]
+      rect: [250, 85, 480, 145]
       color: [192, 224, 255]
     - id: 2
       name: Zona 2
-      rect: [200, 85, 480, 130]
+      rect: [250, 150, 480, 185]
       color: [255, 240, 180]
     - id: 3
       name: Zona 3
-      rect: [200, 135, 480, 170]
+      rect: [250, 190, 480, 225]
       color: [200, 255, 200]
     - id: 4
       name: Zona 4
-      rect: [200, 175, 480, 205]
+      rect: [250, 230, 480, 260]
       color: [255, 200, 200]
     - id: 5
       name: Zona 5
-      rect: [200, 210, 480, 250]
+      rect: [250, 265, 480, 300]
       color: [255, 200, 200]
 
 tracker:
