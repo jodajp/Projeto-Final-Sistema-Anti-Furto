@@ -1,6 +1,6 @@
 """
 Detector de Velocidade Anormal
-Detecta movimentos muito rápidos (típicos de roubos) com normalização de escala.
+Detecta movimentos muito rápidos (típicos de roubos) com normalização de escala e independência de FPS.
 """
 
 from typing import Optional
@@ -11,25 +11,26 @@ from pipeline.spatial_normalizer import NormalizedPose
 
 
 class VelocityDetector(BaseActivity):
-    """Detecta velocidade de movimento anormal com independência de escala."""
+    """Detecta velocidade de movimento anormal baseada em 'torsos por segundo',
+    tornando-a independente de resolução (pixels) e framerate (FPS)."""
 
-    def __init__(self, velocidade_maxima: float = 200.0, cooldown_frames: int = 60):
+    def __init__(self, velocidade_maxima: float = 5.0, cooldown_segundos: float = 2.0):
         super().__init__("velocidade", threshold=0.6)
         self.velocidade_maxima = velocidade_maxima
-        self.cooldown_frames = cooldown_frames
+        self.cooldown_segundos = cooldown_segundos
 
         # Histórico indexado por track_id
         self.ultima_posicao = {}            # track_id -> pelvis (x, y)
-        self.ultimo_frame_id = {}           # track_id -> frame_id
-        self.frames_since_last_alerts = {}  # track_id -> int
+        self.ultimo_timestamp = {}          # track_id -> timestamp (float)
+        self.ultimo_alerta = {}             # track_id -> timestamp do último alerta
 
     def limpa_tracks_inativas(self, ids_presentes: set):
         """Limpa o histórico de tracks inativas para evitar vazamento de memória."""
         for track_id in list(self.ultima_posicao.keys()):
             if track_id not in ids_presentes:
                 self.ultima_posicao.pop(track_id, None)
-                self.ultimo_frame_id.pop(track_id, None)
-                self.frames_since_last_alerts.pop(track_id, None)
+                self.ultimo_timestamp.pop(track_id, None)
+                self.ultimo_alerta.pop(track_id, None)
 
     def detecta(self,
                 norm_pose: NormalizedPose,
@@ -37,11 +38,6 @@ class VelocityDetector(BaseActivity):
                 timestamp: float,
                 track_id: Optional[int] = None) -> Optional[SuspiciousEvent]:
         tid = 0 if track_id is None else track_id
-
-        if tid not in self.frames_since_last_alerts:
-            self.frames_since_last_alerts[tid] = self.cooldown_frames
-
-        self.frames_since_last_alerts[tid] += 1
 
         if not norm_pose or not norm_pose.is_valid:
             return None
@@ -52,42 +48,54 @@ class VelocityDetector(BaseActivity):
         if torso_length <= 0:
             return None
 
-        # Se é o primeiro frame da track, guarda posição e retorna
+        # Se é o primeiro frame da track, inicializa os dados
         if tid not in self.ultima_posicao:
             self.ultima_posicao[tid] = pelvis_atual
-            self.ultimo_frame_id[tid] = frame_id
+            self.ultimo_timestamp[tid] = timestamp
+            self.ultimo_alerta[tid] = 0.0
             return None
 
-        # Calcula deslocamento e velocidade normalizada
-        distancia_raw = np.linalg.norm(pelvis_atual - self.ultima_posicao[tid])
-        frames_decorridos = frame_id - self.ultimo_frame_id[tid]
-        velocidade_raw = distancia_raw / frames_decorridos if frames_decorridos > 0 else 0.0
+        # Calcula o tempo e distância percorrida
+        tempo_decorrido = timestamp - self.ultimo_timestamp[tid]
+        
+        # Evita divisão por zero ou updates no mesmo timestamp
+        if tempo_decorrido <= 0:
+            return None
 
-        # Normaliza a velocidade com base no tamanho do torso (referência de 100px)
-        velocidade = velocidade_raw * (100.0 / torso_length)
+        distancia_pixels = np.linalg.norm(pelvis_atual - self.ultima_posicao[tid])
+        
+        # Velocidade em Torsos por Segundo (Independente de Pixels e FPS)
+        # distancia / torso_length = distância em 'torsos'
+        distancia_torsos = distancia_pixels / torso_length
+        velocidade_instantanea = distancia_torsos / tempo_decorrido
 
-        # Atualiza histórico
+        # Atualiza histórico para o próximo frame
         self.ultima_posicao[tid] = pelvis_atual
-        self.ultimo_frame_id[tid] = frame_id
+        self.ultimo_timestamp[tid] = timestamp
 
-        if velocidade > self.velocidade_maxima and self.frames_since_last_alerts[tid] >= self.cooldown_frames:
-            self.frames_since_last_alerts[tid] = 0
+        # Verifica cooldown
+        tempo_desde_alerta = timestamp - self.ultimo_alerta.get(tid, 0.0)
 
+        if velocidade_instantanea > self.velocidade_maxima and tempo_desde_alerta >= self.cooldown_segundos:
+            self.ultimo_alerta[tid] = timestamp
+
+            confianca = min(velocidade_instantanea / (self.velocidade_maxima * 1.5), 1.0)
+            
             evento = SuspiciousEvent(
                 tipo="velocidade",
                 timestamp=timestamp,
-                confianca=min(velocidade / (self.velocidade_maxima * 2), 1.0),
+                confianca=confianca,
                 frame_id=frame_id,
                 pessoa_id=track_id,
-                descricao=f"Velocidade anormal: {velocidade:.1f} px/frame (normalizada)",
+                descricao=f"Movimento rápido detectado: {velocidade_instantanea:.1f} torsos/s",
                 dados_adicionais={
-                    'velocidade_normalizada': float(velocidade),
-                    'velocidade_raw': float(velocidade_raw),
-                    'torso_length': float(torso_length),
-                    'threshold': float(self.velocidade_maxima)
+                    'velocidade_torsos_seg': float(velocidade_instantanea),
+                    'torso_length_px': float(torso_length),
+                    'threshold_torsos_seg': float(self.velocidade_maxima)
                 }
             )
             self.registra_evento(evento)
             return evento
 
         return None
+

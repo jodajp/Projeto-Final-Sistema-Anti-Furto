@@ -162,8 +162,8 @@ class ShopliftingActivityDetector(BaseActivity):
         # Apply smoothing / consecutive hit evaluation
         self.prob_buffers[tid].append(prob)
         
-        if frame_id % 5 == 0:
-            print(f"[MLP-LSTM] Track {tid} | Frame {frame_id} | suspicious prob: {prob:.3f} | recent: {[round(p, 3) for p in list(self.prob_buffers[tid])]}")
+        if frame_id % 10 == 0:
+            print(f"[MLP-LSTM] Track {tid} | Frame {frame_id} | suspicious prob: {prob:.3f}")
             
         # Count recent windows exceeding threshold
         high_count = sum(1 for p in self.prob_buffers[tid] if p >= self.threshold)
@@ -185,7 +185,7 @@ class ShopliftingActivityDetector(BaseActivity):
                 pessoa_id=track_id,
                 descricao=f"Classificador LSTM detectou SHOPLIFTING (Prob: {prob*100:.1f}%)",
                 dados_adicionais={
-                    "model": "LSTM_attention_45f", 
+                    "model": "LSTM_attention_60f", 
                     "probability": float(prob), 
                     "recent_count": int(high_count)
                 }

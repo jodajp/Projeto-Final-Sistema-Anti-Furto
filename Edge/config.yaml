@@ -33,10 +33,11 @@ activities:
       seq_length: 60
       threshold: 0.35
       cooldown_frames: 60
-  - enabled: false
+
+  - enabled: true
     plugin: Atividades_Suspeitas.velocity_detector:VelocityDetector
     params:
-      velocidade_maxima: 200.0
+      velocidade_maxima: 8.0
 
   - enabled: true
     plugin: Atividades_Suspeitas.posture_detector:PostureDetector
