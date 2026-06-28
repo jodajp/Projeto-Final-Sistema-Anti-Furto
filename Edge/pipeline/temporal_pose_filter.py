@@ -289,8 +289,7 @@ class TemporalPoseFilter:
         # ===== CONSTRAINT DETECTION =====
         affected_by_stretch = self._check_limb_stretching(keypoints)
         constraint_violations = affected_by_stretch.copy()
-
-        # ===== PROCESS EACH KEYPOINT =====
+        # ===== PROCESS EACH KEYPOINT (Fully Vectorized NumPy Approach) =====
         visible = scores >= self.occlusion_confidence_threshold
         in_occlusion = self.state.occlusion_frames > 0
 
@@ -299,72 +298,85 @@ class TemporalPoseFilter:
         was_predicted = np.zeros(17, dtype=bool)
         new_velocity_smooth = self.state.velocity_smooth.copy()
 
-        for i in range(17):
-            is_visible = visible[i]
-            is_occluded = in_occlusion[i]
-            is_head = self._is_head_keypoint(i)
+        head_mask = np.zeros(17, dtype=bool)
+        head_mask[list(self.HEAD_KEYPOINTS)] = True
 
-            if is_visible and not is_occluded:
-                raw_velocity = keypoints[i] - self.state.prev_position[i]
-                velocity_magnitude = float(np.linalg.norm(raw_velocity))
+        # --- Case 1: Visible and not in occlusion ---
+        case1_mask = visible & ~in_occlusion
+        raw_velocity = keypoints - self.state.prev_position  # (17, 2)
+        velocity_magnitude = np.linalg.norm(raw_velocity, axis=1)  # (17,)
 
-                if is_head and self.disable_head_prediction and np.isnan(self.state.position[i]).any():
-                    # Re-entry after a dropped head joint: snap to the detector output
-                    # instead of blending with stale coordinates.
-                    filtered_position[i] = keypoints[i]
-                    new_velocity_smooth[i] = np.zeros(2, dtype=keypoints.dtype)
-                else:
-                    alpha = self._select_adaptive_smoothing_factor(
-                        i, velocity_magnitude, affected_by_stretch[i]
-                    )
+        head_reentry = head_mask & self.disable_head_prediction & np.isnan(self.state.position).any(axis=1)
+        reentry_mask = case1_mask & head_reentry
+        filtered_position[reentry_mask] = keypoints[reentry_mask]
+        new_velocity_smooth[reentry_mask] = 0.0
 
-                    filtered_position[i] = (
-                        alpha * keypoints[i] + (1.0 - alpha) * self.state.position[i]
-                    )
+        # Normal smooth case
+        normal_smooth_mask = case1_mask & ~head_reentry
+        
+        # Compute vectorized alphas
+        alphas = np.full(17, self.smoothing_factor)
+        alphas = np.where(velocity_magnitude > self.rapid_movement_threshold, self.smoothing_factor_fast, alphas)
+        alphas = np.where(affected_by_stretch, np.maximum(0.2, alphas - 0.3), alphas)
+        
+        head_fast = head_mask & (velocity_magnitude > self.head_rapid_movement_threshold)
+        head_slow = head_mask & ~(velocity_magnitude > self.head_rapid_movement_threshold)
+        alphas = np.where(head_fast, np.maximum(alphas, self.head_smoothing_factor_fast), alphas)
+        alphas = np.where(head_slow, np.maximum(alphas, self.head_smoothing_factor_slow), alphas)
+        alphas_exp = alphas[:, np.newaxis]
 
-                    beta = self.velocity_smoothing
-                    new_velocity_smooth[i] = (
-                        beta * raw_velocity + (1.0 - beta) * self.state.velocity_smooth[i]
-                    )
+        filtered_position[normal_smooth_mask] = (
+            alphas_exp[normal_smooth_mask] * keypoints[normal_smooth_mask] + 
+            (1.0 - alphas_exp[normal_smooth_mask]) * self.state.position[normal_smooth_mask]
+        )
+        
+        beta = self.velocity_smoothing
+        new_velocity_smooth[normal_smooth_mask] = (
+            beta * raw_velocity[normal_smooth_mask] + 
+            (1.0 - beta) * self.state.velocity_smooth[normal_smooth_mask]
+        )
+        self.state.occlusion_frames[case1_mask] = 0
 
-                self.state.occlusion_frames[i] = 0
+        # --- Case 2: Not visible and not in occlusion (First frame of occlusion) ---
+        case2_mask = ~visible & ~in_occlusion
+        case2_head = case2_mask & head_mask & self.disable_head_prediction
+        case2_body = case2_mask & ~(head_mask & self.disable_head_prediction)
 
-            # Se não for visível e não estiver em oclusão, tentamos prever.
-            elif not is_visible and self.state.occlusion_frames[i] == 0:
-                # ===== HEAD KEYPOINTS: Don't predict, just drop =====
-                if self.disable_head_prediction and is_head:
-                    # Don't predict head; hide it entirely so the renderer does not
-                    # keep drawing stale coordinates for eyes/ears/nose.
-                    filtered_position[i] = np.array([np.nan, np.nan], dtype=keypoints.dtype)
-                    new_velocity_smooth[i] = np.zeros(2, dtype=keypoints.dtype)
-                    self.state.occlusion_frames[i] = self.max_occlusion_frames + 1  # Force drop immediately
-                    filtered_scores[i] = 0.0
-                    was_predicted[i] = False
-                else:
-                    # ===== BODY KEYPOINTS: Predict with momentum =====
-                    predicted_pos = self.state.position[i] + self.state.velocity_smooth[i]
-                    filtered_position[i] = predicted_pos
-                    new_velocity_smooth[i] = self.state.velocity_smooth[i]
-                    self.state.occlusion_frames[i] = 1
-                    was_predicted[i] = True
-                    filtered_scores[i] = scores[i] * 0.7
+        # Head: drop
+        filtered_position[case2_head] = np.nan
+        new_velocity_smooth[case2_head] = 0.0
+        self.state.occlusion_frames[case2_head] = self.max_occlusion_frames + 1
+        filtered_scores[case2_head] = 0.0
+        was_predicted[case2_head] = False
 
-            elif is_occluded and self.state.occlusion_frames[i] > 0:
-                predicted_pos = filtered_position[i] + new_velocity_smooth[i]
-                filtered_position[i] = predicted_pos
-                new_velocity_smooth[i] *= self.velocity_damping
-                self.state.occlusion_frames[i] += 1
-                was_predicted[i] = True
+        # Body: predict
+        predicted_pos = self.state.position + self.state.velocity_smooth
+        filtered_position[case2_body] = predicted_pos[case2_body]
+        self.state.occlusion_frames[case2_body] = 1
+        was_predicted[case2_body] = True
+        filtered_scores[case2_body] = scores[case2_body] * 0.7
 
-                if self.state.occlusion_frames[i] > self.max_occlusion_frames:
-                    self.state.occlusion_frames[i] = 0
-                    filtered_scores[i] = 0.0
-                    was_predicted[i] = False
-                    new_velocity_smooth[i] = np.zeros(2)
-                    if self.disable_head_prediction and is_head:
-                        filtered_position[i] = np.array([np.nan, np.nan], dtype=keypoints.dtype)
-                else:
-                    filtered_scores[i] = max(0.0, scores[i] * 0.5)
+        # --- Case 3: In occlusion ---
+        case3_mask = in_occlusion
+        predicted_pos_occluded = filtered_position + new_velocity_smooth
+        filtered_position[case3_mask] = predicted_pos_occluded[case3_mask]
+        new_velocity_smooth[case3_mask] *= self.velocity_damping
+        self.state.occlusion_frames[case3_mask] += 1
+        was_predicted[case3_mask] = True
+
+        # Expired occlusion
+        occlusion_expired = case3_mask & (self.state.occlusion_frames > self.max_occlusion_frames)
+        self.state.occlusion_frames[occlusion_expired] = 0
+        filtered_scores[occlusion_expired] = 0.0
+        was_predicted[occlusion_expired] = False
+        new_velocity_smooth[occlusion_expired] = 0.0
+        
+        occlusion_expired_head = occlusion_expired & head_mask & self.disable_head_prediction
+        filtered_position[occlusion_expired_head] = np.nan
+
+        # Active occlusion within tolerance
+        occlusion_valid = case3_mask & ~occlusion_expired
+        filtered_scores[occlusion_valid] = np.maximum(0.0, scores[occlusion_valid] * 0.5)
 
         # ===== APPLY HIERARCHICAL CONFIDENCE PROPAGATION =====
         filtered_scores = self._propagate_confidence_hierarchical(filtered_scores)

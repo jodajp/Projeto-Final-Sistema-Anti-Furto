@@ -140,18 +140,30 @@ class SpatialNormalizer:
         # Pelvis: midpoint of left hip (11) and right hip (12)
         pelvis_left = keypoints[PELVIS_LEFT_IDX]      # [x, y]
         pelvis_right = keypoints[PELVIS_RIGHT_IDX]    # [x, y]
-        pelvis = (pelvis_left + pelvis_right) * 0.5   # Vectorized average
+        
+        left_hip_ok = scores[PELVIS_LEFT_IDX] >= self.params.torso_confidence_threshold
+        right_hip_ok = scores[PELVIS_RIGHT_IDX] >= self.params.torso_confidence_threshold
+        
+        if left_hip_ok and right_hip_ok:
+            pelvis = (pelvis_left + pelvis_right) * 0.5
+            pelvis_conf = np.minimum(scores[PELVIS_LEFT_IDX], scores[PELVIS_RIGHT_IDX])
+        elif left_hip_ok:
+            # Shift slightly towards estimated center based on shoulder width if neck is visible
+            pelvis = pelvis_left
+            pelvis_conf = scores[PELVIS_LEFT_IDX]
+        elif right_hip_ok:
+            pelvis = pelvis_right
+            pelvis_conf = scores[PELVIS_RIGHT_IDX]
+        else:
+            pelvis = (pelvis_left + pelvis_right) * 0.5
+            pelvis_conf = np.minimum(scores[PELVIS_LEFT_IDX], scores[PELVIS_RIGHT_IDX])
         
         # Neck: midpoint of left shoulder (5) and right shoulder (6)
         shoulder_left = keypoints[SHOULDER_LEFT_IDX]  # [x, y]
         shoulder_right = keypoints[SHOULDER_RIGHT_IDX]  # [x, y]
         neck = (shoulder_left + shoulder_right) * 0.5  # Vectorized average
         
-        # Torso confidence: min of the 4 torso joints
-        pelvis_conf = np.minimum(
-            scores[PELVIS_LEFT_IDX],
-            scores[PELVIS_RIGHT_IDX]
-        )
+        # Torso confidence: min of the pelvis and neck anchors
         neck_conf = np.minimum(
             scores[SHOULDER_LEFT_IDX],
             scores[SHOULDER_RIGHT_IDX]

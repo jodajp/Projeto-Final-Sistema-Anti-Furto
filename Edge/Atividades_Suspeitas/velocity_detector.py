@@ -1,26 +1,23 @@
-"""
-Detector de Velocidade Anormal
-Detecta movimentos muito rápidos (típicos de roubos) com normalização de escala e independência de FPS.
-"""
-
-from typing import Optional
+from typing import Optional, Dict
 import numpy as np
 
 from .base_activity import BaseActivity, SuspiciousEvent
+from Detecao.skeleton import LEFT_WRIST, RIGHT_WRIST
 from pipeline.spatial_normalizer import NormalizedPose
 
 
 class VelocityDetector(BaseActivity):
-    """Detecta velocidade de movimento anormal baseada em 'torsos por segundo',
-    tornando-a independente de resolução (pixels) e framerate (FPS)."""
+    """Detecta velocidade de movimento anormal (corridas ou gestos rápidos como roubos)
+    baseando-se em 'torsos por segundo', tornando o cálculo independente de resolução e FPS."""
 
-    def __init__(self, velocidade_maxima: float = 5.0, cooldown_segundos: float = 2.0):
+    def __init__(self, velocidade_maxima: float = 5.0, velocidade_maxima_mao: float = 8.0, cooldown_segundos: float = 2.0):
         super().__init__("velocidade", threshold=0.6)
         self.velocidade_maxima = velocidade_maxima
+        self.velocidade_maxima_mao = velocidade_maxima_mao
         self.cooldown_segundos = cooldown_segundos
 
-        # Histórico indexado por track_id
-        self.ultima_posicao = {}            # track_id -> pelvis (x, y)
+        # Histórico indexado por track_id -> dicionário de juntas {'pelvis': pos, 'l_wrist': pos, 'r_wrist': pos}
+        self.ultima_posicao = {}            # track_id -> dict
         self.ultimo_timestamp = {}          # track_id -> timestamp (float)
         self.ultimo_alerta = {}             # track_id -> timestamp do último alerta
 
@@ -32,6 +29,21 @@ class VelocityDetector(BaseActivity):
                 self.ultimo_timestamp.pop(track_id, None)
                 self.ultimo_alerta.pop(track_id, None)
 
+    def _get_raw_positions(self, norm_pose: NormalizedPose) -> Dict[str, np.ndarray]:
+        positions = {'pelvis': norm_pose.pelvis}
+        
+        # Reconstrói a posição absoluta em pixels para os pulsos a partir da pose normalizada
+        kp = norm_pose.keypoints
+        sc = norm_pose.scores
+        torso_len = norm_pose.torso_length
+        
+        if sc[LEFT_WRIST] >= 0.35:
+            positions['l_wrist'] = kp[LEFT_WRIST] * torso_len + norm_pose.pelvis
+        if sc[RIGHT_WRIST] >= 0.35:
+            positions['r_wrist'] = kp[RIGHT_WRIST] * torso_len + norm_pose.pelvis
+            
+        return positions
+
     def detecta(self,
                 norm_pose: NormalizedPose,
                 frame_id: int,
@@ -42,44 +54,70 @@ class VelocityDetector(BaseActivity):
         if not norm_pose or not norm_pose.is_valid:
             return None
 
-        pelvis_atual = norm_pose.pelvis
         torso_length = norm_pose.torso_length
-
         if torso_length <= 0:
             return None
 
+        posicoes_atuais = self._get_raw_positions(norm_pose)
+
         # Se é o primeiro frame da track, inicializa os dados
         if tid not in self.ultima_posicao:
-            self.ultima_posicao[tid] = pelvis_atual
+            self.ultima_posicao[tid] = posicoes_atuais
             self.ultimo_timestamp[tid] = timestamp
             self.ultimo_alerta[tid] = 0.0
             return None
 
-        # Calcula o tempo e distância percorrida
+        # Calcula o tempo decorrido
         tempo_decorrido = timestamp - self.ultimo_timestamp[tid]
         
         # Evita divisão por zero ou updates no mesmo timestamp
         if tempo_decorrido <= 0:
             return None
 
-        distancia_pixels = np.linalg.norm(pelvis_atual - self.ultima_posicao[tid])
-        
-        # Velocidade em Torsos por Segundo (Independente de Pixels e FPS)
-        # distancia / torso_length = distância em 'torsos'
-        distancia_torsos = distancia_pixels / torso_length
-        velocidade_instantanea = distancia_torsos / tempo_decorrido
+        posicoes_antigas = self.ultima_posicao[tid]
+        velocidades = {}
+
+        # Calcula velocidades para cada junta disponível em ambos os frames
+        for joint in ['pelvis', 'l_wrist', 'r_wrist']:
+            if joint in posicoes_atuais and joint in posicoes_antigas:
+                dist_px = np.linalg.norm(posicoes_atuais[joint] - posicoes_antigas[joint])
+                dist_torsos = dist_px / torso_length
+                velocidades[joint] = dist_torsos / tempo_decorrido
 
         # Atualiza histórico para o próximo frame
-        self.ultima_posicao[tid] = pelvis_atual
+        self.ultima_posicao[tid] = posicoes_atuais
         self.ultimo_timestamp[tid] = timestamp
 
         # Verifica cooldown
         tempo_desde_alerta = timestamp - self.ultimo_alerta.get(tid, 0.0)
+        if tempo_desde_alerta < self.cooldown_segundos:
+            return None
 
-        if velocidade_instantanea > self.velocidade_maxima and tempo_desde_alerta >= self.cooldown_segundos:
+        # Verifica se algum ultrapassou seu respectivo threshold
+        alerta_trigger = False
+        descricao_alerta = ""
+        max_ratio = 0.0
+
+        if 'pelvis' in velocidades:
+            vel = velocidades['pelvis']
+            ratio = vel / self.velocidade_maxima
+            if ratio > 1.0 and ratio > max_ratio:
+                max_ratio = ratio
+                alerta_trigger = True
+                descricao_alerta = f"Movimento corporal rápido: {vel:.1f} torsos/s"
+
+        for joint_name, joint_key in [("Mão esquerda", "l_wrist"), ("Mão direita", "r_wrist")]:
+            if joint_key in velocidades:
+                vel = velocidades[joint_key]
+                ratio = vel / self.velocidade_maxima_mao
+                if ratio > 1.0 and ratio > max_ratio:
+                    max_ratio = ratio
+                    alerta_trigger = True
+                    descricao_alerta = f"{joint_name} com movimento brusco: {vel:.1f} torsos/s"
+
+        if alerta_trigger:
             self.ultimo_alerta[tid] = timestamp
-
-            confianca = min(velocidade_instantanea / (self.velocidade_maxima * 1.5), 1.0)
+            confianca = min(max_ratio * 0.5, 1.0)
             
             evento = SuspiciousEvent(
                 tipo="velocidade",
@@ -87,11 +125,12 @@ class VelocityDetector(BaseActivity):
                 confianca=confianca,
                 frame_id=frame_id,
                 pessoa_id=track_id,
-                descricao=f"Movimento rápido detectado: {velocidade_instantanea:.1f} torsos/s",
+                descricao=descricao_alerta,
                 dados_adicionais={
-                    'velocidade_torsos_seg': float(velocidade_instantanea),
+                    'velocidades': {k: float(v) for k, v in velocidades.items()},
                     'torso_length_px': float(torso_length),
-                    'threshold_torsos_seg': float(self.velocidade_maxima)
+                    'threshold_pelvis': float(self.velocidade_maxima),
+                    'threshold_mao': float(self.velocidade_maxima_mao)
                 }
             )
             self.registra_evento(evento)

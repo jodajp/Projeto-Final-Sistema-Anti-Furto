@@ -71,6 +71,7 @@ class SkeletonVisualizer:
         self.line_thickness = line_thickness
         self.show_labels = show_labels
         self.show_confidence = show_confidence
+        self._cached_canvas = None
     
     def render(
         self,
@@ -104,11 +105,16 @@ class SkeletonVisualizer:
             if scores.shape != (17,):
                 raise ValueError(f"Expected scores shape (17,), got {scores.shape}")
         
-        # Create black canvas
-        canvas = np.zeros(
-            (self.canvas_size, self.canvas_size, 3),
-            dtype=np.uint8
-        )
+        # Create or reuse black canvas
+        if self._cached_canvas is None or self._cached_canvas.shape[:2] != (self.canvas_size, self.canvas_size):
+            self._cached_canvas = np.zeros(
+                (self.canvas_size, self.canvas_size, 3),
+                dtype=np.uint8
+            )
+        else:
+            self._cached_canvas.fill(0)
+            
+        canvas = self._cached_canvas
         
         # Add title
         if title:

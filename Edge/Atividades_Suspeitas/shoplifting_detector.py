@@ -61,44 +61,30 @@ class ShopliftingActivityDetector(BaseActivity):
         self.frames_since_last_alerts = {}  # track_id -> frames since last alert
         
         self.feature_extractor = KinematicFeatureExtractor()
-        self.use_onnx = model_file.suffix.lower() == ".onnx"
         self.model_loaded = False
-        self.device = None
-        self.config = None
-        self.model = None
         
         # Load the model only once at initialization
         if model_file.exists():
-            if self.use_onnx:
-                import onnxruntime as ort
-                self.ort_session = ort.InferenceSession(str(model_file), providers=['CPUExecutionProvider'])
-                self.model_loaded = True
-                print(f"[ShopliftingActivityDetector] Loaded ONNX LSTM model from {model_file} successfully.")
-            else:
-                import torch
-                from Train.phase4_model import Phase4Classifier
-                from Train.phase4_types import Phase4Config
-
-                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                self.config = Phase4Config(
-                    sequence_length=self.seq_length,
-                    input_size=self.feature_extractor.feature_dim(),
-                    hidden_size=128,
-                    num_layers=1,
-                    attention_size=64,
-                    dropout=0.1
-                )
-                self.model = Phase4Classifier(self.config).to(self.device)
-                checkpoint = torch.load(str(model_file), map_location=self.device, weights_only=False)
-                if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-                    self.model.load_state_dict(checkpoint["model_state_dict"])
-                else:
-                    self.model.load_state_dict(checkpoint)
-                self.model.eval()
-                self.model_loaded = True
-                print(f"[ShopliftingActivityDetector] Loaded PyTorch LSTM model from {model_file} successfully.")
+            import onnxruntime as ort
+            
+            # Detect and configure hardware acceleration (CUDA -> DirectML -> CPU)
+            available_providers = ort.get_available_providers()
+            providers = []
+            if 'CUDAExecutionProvider' in available_providers:
+                providers.append('CUDAExecutionProvider')
+            if 'DmlExecutionProvider' in available_providers:
+                providers.append('DmlExecutionProvider')
+            providers.append('CPUExecutionProvider')
+            
+            print(f"[ShopliftingActivityDetector] Attempting to load ONNX model with providers: {providers}")
+            self.ort_session = ort.InferenceSession(str(model_file), providers=providers)
+            self.model_loaded = True
+            
+            # Log the selected provider
+            active_provider = self.ort_session.get_providers()[0] if self.ort_session.get_providers() else "Unknown"
+            print(f"[ShopliftingActivityDetector] Loaded ONNX LSTM model from {model_file} successfully. Active provider: {active_provider}")
         else:
-            print(f"[WARNING] LSTM Model not found at {model_file} - Shoplifting detector disabled.")
+            print(f"[WARNING] ONNX LSTM Model not found at {model_file} - Shoplifting detector disabled.")
             
     def limpa_tracks_inativas(self, ids_presentes: set):
         """Limpa o estado armazenado para tracks inativas para evitar vazamentos de memória."""
@@ -147,17 +133,10 @@ class ShopliftingActivityDetector(BaseActivity):
         # Extract features
         features_batch = self.feature_extractor.transform(coords_batch)  # (1, T, input_size)
         
-        if self.use_onnx:
-            ort_inputs = {self.ort_session.get_inputs()[0].name: features_batch.astype(np.float32)}
-            ort_outs = self.ort_session.run(None, ort_inputs)
-            logit = float(ort_outs[0][0])
-            prob = 1.0 / (1.0 + np.exp(-logit))
-        else:
-            import torch
-            features_tensor = torch.from_numpy(features_batch).float().to(self.device)
-            with torch.no_grad():
-                logits, _ = self.model(features_tensor)
-                prob = torch.sigmoid(logits).item()
+        ort_inputs = {self.ort_session.get_inputs()[0].name: features_batch.astype(np.float32)}
+        ort_outs = self.ort_session.run(None, ort_inputs)
+        logit = float(ort_outs[0][0])
+        prob = 1.0 / (1.0 + np.exp(-logit))
             
         # Apply smoothing / consecutive hit evaluation
         self.prob_buffers[tid].append(prob)

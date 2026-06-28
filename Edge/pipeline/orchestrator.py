@@ -99,12 +99,9 @@ class AntiTheftOrchestrator:
         self.metricas_intervalo = 300  # a cada 300 frames (~10s a 30fps)
         self.ultimo_frame_metricas = 0
 
-        # Frame web para stream
-        # TODO: LIMPAR ESTE CÓDIGO E REMOVER ESTAS VARIAVEIS
+        # Configuração do uploader web
         self.frame_web_intervalo = 10
         self.ultimo_frame_web = 0
-        self.frame_web_path = os.path.join(self.metricas_dir, 'last_frame.jpg')
-
         # Uploader de frames em segundo plano para a API
         self.frame_queue = queue.Queue(maxsize=1)
         self.uploader_thread = threading.Thread(target=self._frame_uploader_loop, daemon=True)
@@ -219,32 +216,14 @@ class AntiTheftOrchestrator:
     def _guardar_frame_web(self, frame):
         """Guarda o último frame processado para stream web e coloca na fila de upload."""
         try:
-            altura, largura = frame.shape[:2]
-            if largura > 1280:
-                escala = 1280 / largura
-                frame_redimensionado = cv2.resize(frame, (1280, int(altura * escala)))
-            else:
-                frame_redimensionado = frame
-            
-            # Codifica em JPEG em memória
-            success, encoded_image = cv2.imencode('.jpg', frame_redimensionado, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if success:
-                jpeg_bytes = encoded_image.tobytes()
-                # Tenta colocar na fila (se cheia, retira o anterior para manter sempre o mais fresco)
-                try:
-                    self.frame_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                self.frame_queue.put_nowait(jpeg_bytes)
-
-            api_url = self.runtime_config.get("api_url", "")
-
-            # TODO: Repensar se vale a pena
-            # Só grava em disco se não houver uploader ativo
-            if not api_url:
-                cv2.imwrite(self.frame_web_path, frame_redimensionado, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            # Tenta colocar na fila (se cheia, retira o anterior para manter sempre o mais fresco)
+            try:
+                self.frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+            self.frame_queue.put_nowait(frame.copy())
         except Exception as e:
-            print(f"[AVISO] Falha ao guardar frame web: {str(e)}")
+            print(f"[AVISO] Falha ao guardar frame web na fila: {str(e)}")
 
     def _frame_uploader_loop(self):
         """Loop executado em segundo plano para fazer upload dos frames via POST HTTP"""
@@ -258,20 +237,30 @@ class AntiTheftOrchestrator:
 
         while True:
             try:
-                frame_data = self.frame_queue.get()
-                if frame_data is None:
+                frame = self.frame_queue.get()
+                if frame is None:
                     break
 
                 try:
-                    # Envia como corpo binário (raw data)
-                    requests.post(
-                        upload_url, 
-                        data=frame_data, 
-                        headers={"Content-Type": "image/jpeg"}, 
-                        timeout=2.0
-                    )
+                    altura, largura = frame.shape[:2]
+                    if largura > 1280:
+                        escala = 1280 / largura
+                        frame_redimensionado = cv2.resize(frame, (1280, int(altura * escala)))
+                    else:
+                        frame_redimensionado = frame
+                    
+                    success, encoded_image = cv2.imencode('.jpg', frame_redimensionado, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if success:
+                        jpeg_bytes = encoded_image.tobytes()
+                        # Envia como corpo binário (raw data)
+                        requests.post(
+                            upload_url, 
+                            data=jpeg_bytes, 
+                            headers={"Content-Type": "image/jpeg"}, 
+                            timeout=2.0
+                        )
                 except Exception:
-                    # Falhas de rede são silenciosas para não inundar a consola
+                    # Falhas de rede ou de codificação são silenciosas para não inundar a consola
                     pass
             except Exception as e:
                 time.sleep(1)

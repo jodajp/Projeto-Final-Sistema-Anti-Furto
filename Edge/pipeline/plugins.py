@@ -57,7 +57,7 @@ def load_activities(specs: List[Dict[str, Any]]):
             continue
         activity = instantiate_from_spec(spec)
         if not hasattr(activity, "detecta"):
-            raise TypeError(f"Plugin de atividade sem metodo detecta: {spec.get('plugin')}")
+            raise PluginError(f"Plugin de atividade sem metodo detecta: {spec.get('plugin')}")
         activities.append(activity)
     return activities
 
@@ -70,6 +70,6 @@ def load_alert_handlers(specs: List[Dict[str, Any]]):
             continue
         handler = instantiate_from_spec(spec)
         if not hasattr(handler, "registra_evento"):
-            raise TypeError(f"Handler de alerta sem metodo registra_evento: {spec.get('plugin')}")
+            raise PluginError(f"Handler de alerta sem metodo registra_evento: {spec.get('plugin')}")
         handlers.append(handler)
     return handlers

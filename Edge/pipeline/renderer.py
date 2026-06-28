@@ -31,6 +31,7 @@ class PoseRenderer:
         self.color_text = _to_color(colors.get("text"), (0, 255, 0))
         self.color_warning = _to_color(colors.get("warning"), (0, 0, 255))
         self.color_muted = _to_color(colors.get("muted"), (200, 200, 200))
+        self._cached_canvas = None
 
     def _draw_pose(self, image, keypoints, scores, line_color, point_color):
         for i, j in SKELETON_CONNECTIONS:
@@ -74,8 +75,13 @@ class PoseRenderer:
         if not self.show_skeleton_canvas:
             return frame_vis
 
-        # Build separate canvas for skeletons but keep main frame size unchanged
-        canvas = np.full_like(frame, 255)
+        # Re-use or initialize canvas to prevent memory thrashing
+        if self._cached_canvas is None or self._cached_canvas.shape != frame.shape:
+            self._cached_canvas = np.full_like(frame, 255)
+        else:
+            self._cached_canvas.fill(255)
+            
+        canvas = self._cached_canvas
         for pose_keypoints, pose_scores in poses:
             self._draw_pose(canvas, pose_keypoints, pose_scores, self.color_canvas_line, self.color_canvas_point)
 
