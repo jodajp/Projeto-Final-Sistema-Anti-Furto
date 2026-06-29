@@ -46,8 +46,10 @@ class ShopliftingActivityDetector(BaseActivity):
                 except Exception:
                     pass
                     
+        # temporario
         if calibrated_threshold is not None:
-            threshold = calibrated_threshold
+            # Enforce a strict minimum threshold to prevent false positive storms
+            threshold = max(calibrated_threshold, 0.50)
 
         super().__init__("shoplifting_ml", threshold=threshold)
         self.seq_length = seq_length
@@ -149,12 +151,6 @@ class ShopliftingActivityDetector(BaseActivity):
         
         if high_count >= self.consecutive_required and self.frames_since_last_alerts[tid] >= self.cooldown_frames:
             self.frames_since_last_alerts[tid] = 0
-            self.prob_buffers[tid].clear()
-            
-            # Retain only half the buffer to prevent rapid consecutive alerts
-            for _ in range(self.seq_length // 2):
-                if self.pose_buffers[tid]:
-                    self.pose_buffers[tid].popleft()
                     
             return SuspiciousEvent(
                 tipo=self.nome,

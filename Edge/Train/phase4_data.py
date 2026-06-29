@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -173,14 +174,16 @@ def build_phase4_samples(config: Phase4DataConfig) -> List[Phase4Sample]:
             config.sequence_length,
             config.manual_limit
         )
-        # Dynamic class-balanced oversampling targeting 90 windows per class
+        # Dynamic class-balanced oversampling targeting the majority class size
         normal_samples = [s for s in manual_samples if s.label == 0]
         suspicious_samples = [s for s in manual_samples if s.label == 1]
         
         n_normal = len(normal_samples)
         n_suspicious = len(suspicious_samples)
         
-        target_windows = 180
+        # Balance dataset dynamically so model does not collapse
+        target_windows = max(n_normal, n_suspicious, 180)
+        
         oversampled_manual = []
         
         if n_normal > 0:
@@ -267,7 +270,39 @@ class Phase4PoseDataset(Dataset):
         if self.augment:
             rng = np.random.default_rng()
             augmented = coords.copy()
+            scores_aug = scores.copy()
 
+            # --- Mirroring (Horizontal Flip) ---
+            mirror_prob = float(os.environ.get("AUG_MIRROR_PROB", "0.5"))
+            if rng.random() < mirror_prob:
+                augmented[:, :, 0] = -augmented[:, :, 0]
+                swap_pairs = [(1,2), (3,4), (5,6), (7,8), (9,10), (11,12), (13,14), (15,16)]
+                left_idx = [p[0] for p in swap_pairs]
+                right_idx = [p[1] for p in swap_pairs]
+                augmented[:, left_idx + right_idx, :] = augmented[:, right_idx + left_idx, :]
+                scores_aug[:, left_idx + right_idx] = scores_aug[:, right_idx + left_idx]
+
+            # --- True Time Warping ---
+            T = augmented.shape[0]
+            time_warp_prob = float(os.environ.get("AUG_TIME_WARP_PROB", "0.5"))
+            if rng.random() < time_warp_prob:
+                # Pick a random speed factor between 0.75 (slower) and 1.25 (faster)
+                warp_factor = rng.uniform(0.75, 1.25)
+                # Create an array of indices based on warp factor
+                indices = np.arange(0, T, warp_factor)
+                indices = np.clip(np.round(indices), 0, T - 1).astype(int)
+                
+                if len(indices) >= T:
+                    indices = indices[:T]
+                else:
+                    pad_len = T - len(indices)
+                    # Pad with the last index to maintain sequence length
+                    indices = np.pad(indices, (0, pad_len), mode='edge')
+                    
+                augmented = augmented[indices]
+                scores_aug = scores_aug[indices]
+
+            # --- Spatial Jitter / Scale / Translate ---
             scale = 1.0 + rng.normal(0.0, self.augmentation_scale)
             translate = rng.normal(0.0, self.augmentation_translate, size=(1, 1, 2)).astype(np.float32)
             jitter = rng.normal(0.0, self.augmentation_noise, size=augmented.shape).astype(np.float32)
@@ -275,19 +310,27 @@ class Phase4PoseDataset(Dataset):
             augmented = augmented * np.float32(scale)
             augmented = augmented + translate + jitter
 
-            # Keep the augmentation conservative: the label should not change,
-            # but the model sees slightly different spatial realizations.
+            # --- Joint Dropout (Spatial Dropout) ---
+            joint_drop_prob = float(os.environ.get("AUG_JOINT_DROP_PROB", "0.3"))
+            if rng.random() < joint_drop_prob:
+                num_drop = rng.integers(1, 4)
+                # Drop random joints, allowing the model to handle occlusions
+                drop_indices = rng.choice(17, size=num_drop, replace=False)
+                augmented[:, drop_indices, :] = np.nan
+                scores_aug[:, drop_indices] = 0.0
+
             feats = KinematicFeatureExtractor().transform(augmented[np.newaxis, ...])[0]
             
-            # Speed augmentation: multiply velocities (first 34 dims) by a random scale factor
+            # --- Speed augmentation ---
             speed_factor = rng.uniform(0.7, 1.3)
             feats[:, :34] *= np.float32(speed_factor)
         else:
             feats = self.feats[idx].copy()
+            scores_aug = scores
 
         return {
             "poses": torch.from_numpy(feats),
-            "confidences": torch.from_numpy(scores),
+            "confidences": torch.from_numpy(scores_aug),
             "labels": torch.tensor(self.labels[idx], dtype=torch.float32),
             "source": self.sources[idx],
             "clip_id": self.clip_ids[idx],

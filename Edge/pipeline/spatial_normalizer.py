@@ -197,7 +197,18 @@ class SpatialNormalizer:
         
         # ===== Compute Torso Length (Vectorized) =====
         torso_vec = neck - pelvis              # [dx, dy]
-        torso_length = np.float32(np.linalg.norm(torso_vec))  # Euclidean distance (default de linalg é 64float->float32)
+        raw_torso_length = np.float32(np.linalg.norm(torso_vec))  # Euclidean distance
+        
+        # Robust anatomical scaling: prevent shrinking when bending forward
+        shoulder_width = np.float32(np.linalg.norm(shoulder_left - shoulder_right))
+        hip_width = np.float32(np.linalg.norm(pelvis_left - pelvis_right))
+        
+        torso_length = np.float32(max(
+            raw_torso_length,
+            shoulder_width * 1.5,
+            hip_width * 1.5,
+            self.params.min_torso_length_px
+        ))
         
         if torso_length < self.params.min_torso_length_px:
             # Torso too small, return invalid

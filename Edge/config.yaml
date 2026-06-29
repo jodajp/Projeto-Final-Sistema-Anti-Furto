@@ -11,7 +11,8 @@ camera:
   #backend: CAP_ANY
 
 runtime:
-  frame_skip: 2
+  alert_cooldown_frames: 45
+  activity_smoothing_window: 5
   cache_result: true
   debug: false
   api_url: "http://projeto-antifurto-vm1.norwayeast.cloudapp.azure.com:8000"  # Endereço da API na Cloud
@@ -29,17 +30,16 @@ activities:
   - enabled: true
     plugin: Atividades_Suspeitas.shoplifting_detector:ShopliftingActivityDetector
     params:
-      model_path: ./models/phase4_experiment_model.onnx
       seq_length: 60
       threshold: 0.35
       cooldown_frames: 60
 
-  - enabled: true
+  - enabled: false
     plugin: Atividades_Suspeitas.velocity_detector:VelocityDetector
     params:
       velocidade_maxima: 8.0
 
-  - enabled: true
+  - enabled: false
     plugin: Atividades_Suspeitas.posture_detector:PostureDetector
     params:
       agachamento_threshold: 0.9
@@ -59,11 +59,20 @@ alerts:
         pasta_alertas: ./Alertas/history/
         save_json: true
         verbose: true
+    - enabled: true
+      plugin: Alertas.auto_clip_extractor:AutoClipExtractor
+      params:
+        pasta_clips: ./Alertas/clips/
+        largura: 640
+        altura: 480
+        fps: 30.0
+        pre_event_frames: 60
+        post_event_frames: 60
 
 visualization:
   enabled: true
   show_skeleton_canvas: true
-  confidence_threshold: 0.3
+  confidence_threshold: 0.1
   window_name: ANTI-FURTO
   max_display_width: 1000
   max_display_height: 750
@@ -114,31 +123,50 @@ tracker:
 
 temporal_filtering:
   enabled: true
-  # Core smoothing parameters
-  smoothing_factor: 0.6                      # EMA factor for slow/normal movements
-  smoothing_factor_fast: 0.85                # EMA factor for rapid movements (shoplifting grabs)
-  rapid_movement_threshold: 5.0              # px/frame threshold to trigger fast mode
-  velocity_smoothing: 0.3                    # EMA factor for velocity smoothing
-  occlusion_confidence_threshold: 0.3        # Threshold below which keypoint is occluded
-  max_occlusion_frames: 5                    # Max frames to predict during occlusion
-  velocity_damping: 0.94                     # Velocity decay during occlusion (0.94 = 6% loss/frame)
-  head_smoothing_factor_slow: 0.75          # Head smoothing when motion is slow/stable
-  head_smoothing_factor_fast: 0.95          # Head response when motion is fast (reduce lag)
-  head_rapid_movement_threshold: 5.0        # Head fast-motion trigger in px/frame
+  # One-Euro Filter parameters (NEW)
+  one_euro_min_cutoff: 0.8                   # Low frequency cutoff (increased to reduce baseline lag)
+  one_euro_beta: 0.80                        # High frequency adaptive factor (tuned for ultra-fast grab response)
+  one_euro_d_cutoff: 1.0                     # Velocity filter cutoff
   
+  # Confidence Hysteresis
+  confidence_high: 0.40                      # Confidence to reappear (lowered to acquire fast arms quickly)
+  confidence_low: 0.15                       # Confidence to disappear (lowered to PREVENT dropping out during motion blur!)
+
+  # Occlusion handling
+  occlusion_confidence_threshold: 0.35       # Kept for fallback/propagation
+  max_occlusion_frames: 15                   # Max frames to predict during occlusion (extended for kinematic prediction)
+  velocity_damping: 0.92                     # Absolute velocity decay per frame during occlusion (body root joints)
+  rel_vel_damping: 0.88                      # Relative velocity decay per frame (limb swing during occlusion)
+  occlusion_conf_decay: 0.75                 # Exponential factor for confidence fade during occlusion (0.75^t)
+
+  # Confidence-trust modulation: alpha_effective = alpha_base * score^power
+  conf_trust_power: 0.5
+
+  # Body-rotation compensation
+  # When the whole body moves > threshold px/frame (turn, sidestep),
+  # add extra beta to ALL joints so arms don't lag behind the torso.
+  body_motion_threshold: 8.0                 # px/frame CoM speed to trigger boost
+  body_motion_beta: 0.30                     # Extra beta added per px above threshold
+
+  # Per-joint beta multipliers (distal joints are more responsive)
+  distal_beta_mult: 2.5                      # Wrists + ankles multiplier vs base beta
+
   # Skeletal constraint parameters
-  limb_stretch_threshold: 1.5                # Max allowed limb length ratio vs baseline (1.5 = 50% stretch)
+  limb_stretch_threshold: 1.2                # Max allowed limb length ratio vs torso scale
   # Feature toggles
   enable_hierarchical_confidence: true       # If parent occluded, reduce children
   
   # Head & arm motion handling (NEW - user-requested fixes)
   disable_head_prediction: true              # Don't predict eyes/nose when out of frame (drop instead)
 
+  # Anti-Teleport Shield
+  max_velocity_ratio: 0.20                   # Max allowed jump per frame relative to person scale
+
 spatial_normalization:
   enabled: true
   torso_confidence_threshold: 0.5
   min_torso_length_px: 10.0
-  allow_invalid_torso: false
+  allow_invalid_torso: true
   visualization:
     debug_mode: true
     canvas_size: 800

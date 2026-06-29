@@ -104,8 +104,8 @@ class ONNXDetectorImpl:
                 backend='onnxruntime',
                 device=device,
                 model_input_size=(640, 640),
-                nms_thr=0.35,      # Lowered from 0.65 to aggressively suppress overlapping/duplicate detections
-                score_thr=0.4       # Filter weak detections
+                nms_thr=0.5,      # Lowered from 0.65 to aggressively suppress overlapping/duplicate detections
+                score_thr=0.25       # Filter weak detections
             )
         except Exception as e:
             if device in ['winml', 'cuda']:
@@ -115,8 +115,8 @@ class ONNXDetectorImpl:
                     backend='onnxruntime',
                     device='cpu',
                     model_input_size=(640, 640),
-                    nms_thr=0.35,      # Lowered from 0.65 to aggressively suppress overlapping/duplicate detections
-                    score_thr=0.4
+                    nms_thr=0.5,      # Lowered from 0.65 to aggressively suppress overlapping/duplicate detections
+                    score_thr=0.25
                 )
             else:
                 print(f"  [ERRO] Falha ao carregar modelo: {e}")
@@ -153,7 +153,7 @@ class ONNXDetectorImpl:
             keypoints, scores = self.model(frame)
             
             # Remove low-confidence detections per frame
-            valid_mask = scores.mean(axis=1) > 0.05  # Filter persons with avg confidence < 0.05
+            valid_mask = scores.mean(axis=1) > 0.20  # Filter persons with avg confidence < 0.20
             keypoints = keypoints[valid_mask]
             scores = scores[valid_mask]
             

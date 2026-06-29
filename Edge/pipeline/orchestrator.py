@@ -618,6 +618,12 @@ class AntiTheftOrchestrator:
 
         self._processar_zonas(entidades, timestamp)
         alert_text = self._processar_atividades(entidades, timestamp)
+        
+        # Notifica handlers que precisam observar todos os frames (ex: extratores contínuos de clipe)
+        for handler in self.alert_handlers:
+            if hasattr(handler, "processa_frame"):
+                handler.processa_frame(entidades, frame_shape, self.metrics.frame_count)
+                
         return entidades, alert_text
 
     def _render_normalized_canvas(self, entidades):
@@ -698,28 +704,33 @@ class AntiTheftOrchestrator:
                     keypoints, scores = self.detector.detect(frame)
                     self.last_inference_ms = (time.time() - t0) * 1000.0
                     self.metrics.on_inference(self.last_inference_ms)
-                    self.last_detection = (keypoints, scores)
-                elif not self.cache_result:
-                    self.last_detection = ([], [])
+                    
+                    entidades, new_alert_text = [], None
+                    if keypoints is not None and len(keypoints) > 0:
+                        entidades, new_alert_text = self._processar_frame(keypoints, scores, frame.shape, timestamp)
+                        
+                    self.last_entidades = entidades
+                    
+                    # Persistência do texto do alerta no ecrã
+                    if new_alert_text:
+                        self.current_alert_text = new_alert_text
+                        self.current_alert_countdown = self.alert_persist_frames
+                else:
+                    if not self.cache_result:
+                        self.last_entidades = []
+                    entidades = getattr(self, 'last_entidades', [])
+                    keypoints = None
+                    scores = None
 
-                keypoints, scores = self.last_detection
-
-                entidades, new_alert_text = [], None
-                if keypoints is not None and len(keypoints) > 0:
-                    entidades, new_alert_text = self._processar_frame(keypoints, scores, frame.shape, timestamp)
-
-                # Persistência do texto do alerta no ecrã
-                if new_alert_text:
-                    self.current_alert_text = new_alert_text
-                    self.current_alert_countdown = self.alert_persist_frames
-                elif self.current_alert_countdown > 0:
-                    self.current_alert_countdown -= 1
-                    if self.current_alert_countdown == 0:
-                        self.current_alert_text = None
+                if not should_infer:
+                    if self.current_alert_countdown > 0:
+                        self.current_alert_countdown -= 1
+                        if self.current_alert_countdown == 0:
+                            self.current_alert_text = None
 
                 # Render: usa entidades processadas para alinhar skeleton com caixas
-                render_kpts = [ent['kpts'] for ent in entidades] if entidades else keypoints
-                render_scrs = [ent['scrs'] for ent in entidades] if entidades else scores
+                render_kpts = [ent['kpts'] for ent in entidades] if entidades else []
+                render_scrs = [ent['scrs'] for ent in entidades] if entidades else []
 
                 output = self.renderer.render(frame, render_kpts, render_scrs)
                 self._draw_zones(output)

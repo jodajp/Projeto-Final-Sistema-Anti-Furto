@@ -14,8 +14,10 @@ from Edge.Detecao.detector_factory import create_detector
 from Edge.pipeline.config import AppConfig
 from Edge.pipeline.spatial_normalizer import SpatialNormalizer, NormalizationParams
 
-def process_video(video_path, detector, normalizer, output_npz_path, label):
-    print(f"Processing {video_path} (Label: {label})...")
+from Edge.pipeline.temporal_pose_filter import TemporalPoseFilter
+
+def process_video(video_path, detector, normalizer, output_npz_path, label, use_filter=False, frame_skip=1, app_config=None):
+    print(f"Processing {video_path} (Label: {label}, Filter: {use_filter}, Skip: {frame_skip})...")
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         print(f"Error opening video: {video_path}")
@@ -28,7 +30,16 @@ def process_video(video_path, detector, normalizer, output_npz_path, label):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_idx = 0
     
+    temp_filter = None
+    if use_filter and app_config:
+        temp_filter = TemporalPoseFilter(app_config)
+    
     while True:
+        if frame_skip > 1:
+            for _ in range(frame_skip - 1):
+                cap.grab()
+                frame_idx += 1
+                
         ret, frame = cap.read()
         if not ret:
             break
@@ -53,6 +64,10 @@ def process_video(video_path, detector, normalizer, output_npz_path, label):
         raw_kpts = np.asarray(raw_kpts, dtype=np.float32).reshape(17, 2)
         raw_scores = np.asarray(raw_scores, dtype=np.float32).reshape(17)
         
+        # Apply Temporal Filter if enabled
+        if temp_filter:
+            raw_kpts, raw_scores, _ = temp_filter.filter_pose(raw_kpts, raw_scores)
+            
         # Normalize
         norm_pose = normalizer.normalize(raw_kpts, raw_scores)
         
@@ -61,7 +76,7 @@ def process_video(video_path, detector, normalizer, output_npz_path, label):
         norm_kpts_list.append(norm_pose.keypoints)
         
         frame_idx += 1
-        if frame_idx % 100 == 0:
+        if frame_idx % 100 == 0 or frame_idx >= total_frames:
             print(f"Processed {frame_idx}/{total_frames} frames...")
             
     cap.release()
@@ -83,6 +98,12 @@ def process_video(video_path, detector, normalizer, output_npz_path, label):
     return True
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Extract poses from videos")
+    parser.add_argument("--use-filter", action="store_true", help="Apply TemporalPoseFilter during extraction")
+    parser.add_argument("--frame-skip", type=int, default=1, help="Frame skipping value (default: 1)")
+    args = parser.parse_args()
+
     config_path = ROOT_DIR / "Edge" / "config.yaml"
     with open(config_path, 'r', encoding='utf-8') as f:
         config_data = yaml.safe_load(f)
@@ -99,8 +120,16 @@ def main():
         allow_invalid_torso=True
     ))
     
+    folder_suffix = ""
+    if args.use_filter:
+        folder_suffix += "_filter"
+    if args.frame_skip > 1:
+        folder_suffix += f"_skip{args.frame_skip}"
+        
+    folder_name_clips = f"clips{folder_suffix}" if folder_suffix else "clips"
+    
     recorded_dir = ROOT_DIR / "Edge" / "Visualizar_Data" / "Data" / "Recorded"
-    output_manifest_path = ROOT_DIR / "Edge" / "Visualizar_Data" / "Output" / "clips" / "clips_manifest.jsonl"
+    output_manifest_path = ROOT_DIR / "Edge" / "Visualizar_Data" / "Output" / folder_name_clips / "clips_manifest.jsonl"
     output_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     
     targets = [
@@ -120,7 +149,7 @@ def main():
                         existing_entries[entry["npz_path"]] = entry
         except Exception as e:
             print(f"Warning: Could not read existing manifest file: {e}")
-
+ 
     for folder_name, label_val, output_subfolder in targets:
         folder_path = recorded_dir / folder_name
         if not folder_path.exists():
@@ -130,7 +159,7 @@ def main():
         video_files = list(folder_path.glob("*.mp4")) + list(folder_path.glob("*.avi"))
         for video_path in video_files:
             npz_name = f"{video_path.stem}_processed.npz"
-            output_npz_path = ROOT_DIR / "Edge" / "Visualizar_Data" / "Output" / "clips" / output_subfolder / f"{video_path.stem}" / npz_name
+            output_npz_path = ROOT_DIR / "Edge" / "Visualizar_Data" / "Output" / folder_name_clips / output_subfolder / f"{video_path.stem}" / npz_name
             
             # Skip processing if NPZ file already exists
             npz_str = str(output_npz_path)
@@ -146,7 +175,7 @@ def main():
                     }
                 continue
                 
-            success = process_video(video_path, detector, normalizer, output_npz_path, label_val)
+            success = process_video(video_path, detector, normalizer, output_npz_path, label_val, use_filter=args.use_filter, frame_skip=args.frame_skip, app_config=app_config)
             if success:
                 entry = {
                     "entry_id": f"clip_recorded_{video_path.stem}",
