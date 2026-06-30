@@ -9,15 +9,14 @@ DIR_ATUAL = os.path.dirname(os.path.abspath(__file__))
 PASTA_EDGE = os.path.dirname(DIR_ATUAL) 
 DB_PATH = os.path.join(PASTA_EDGE, "dados_oficial.db")
 
-# URLs DA TUA NUVEM (API)
-CLOUD_API_ALERTAS = "http://20.251.152.37:8000/api/alertas/sincronizar"
-CLOUD_API_METRICAS = "http://20.251.152.37:8000/api/metricas/registar"
-CLOUD_API_ZONAS = "http://20.251.152.37:8000/api/zonas/sincronizar"
 
 class DatabaseHandler:
-    def __init__(self):
+    def __init__(self, api_base_url="http://projeto-antifurto-vm1.norwayeast.cloudapp.azure.com:8000"):
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.cursor = self.conn.cursor()
+        self.url_alertas = f"{api_base_url}/api/alertas/sincronizar"
+        self.url_metricas = f"{api_base_url}/api/metricas/registar"
+        self.url_zonas = f"{api_base_url}/api/zonas/sincronizar"
         
         # 1. Tabela local para ALERTAS
         self.cursor.execute("""
@@ -190,7 +189,7 @@ class DatabaseHandler:
                         "confianca": safe_float(confianca), 
                         "timestamp": safe_decode(ts)
                     }
-                    resp = requests.post(CLOUD_API_ALERTAS, json=payload, timeout=3.0)
+                    resp = requests.post(self.url_alertas, json=payload, timeout=3.0)
                     if resp.status_code == 200:
                         sync_cursor.execute("UPDATE alertas SET sincronizado = 1 WHERE id = ?", (db_id,))
                         sync_conn.commit()
@@ -221,7 +220,7 @@ class DatabaseHandler:
                         "pessoas_detetadas": safe_int(pessoas)
                     }
                     
-                    resp = requests.post(CLOUD_API_METRICAS, json=payload_metrica, timeout=3.0)
+                    resp = requests.post(self.url_metricas, json=payload_metrica, timeout=3.0)
                     if resp.status_code == 200:
                         sync_cursor.execute("UPDATE metricas SET sincronizado = 1 WHERE id = ?", (db_id,))
                         sync_conn.commit()
@@ -261,7 +260,7 @@ class DatabaseHandler:
                             "timestamp": ts_iso
                         }
                         
-                        resp = requests.post(CLOUD_API_ZONAS, json=payload_zone, timeout=3.0)
+                        resp = requests.post(self.url_zonas, json=payload_zone, timeout=3.0)
                         
                         if resp.status_code == 200:
                             sync_cursor.execute("UPDATE zones SET sincronizado = 1 WHERE id = ?", (db_id,))

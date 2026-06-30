@@ -84,7 +84,9 @@ class AntiTheftOrchestrator:
         )
         self.last_tracked_objects = []
 
-        self.db = DatabaseHandler()
+        api_url = self.runtime_config.get("api_url", "").strip()
+
+        self.db = DatabaseHandler(api_base_url=api_url)
         self._debug_bbox_printed = False
 
         # Alert persistence fields
