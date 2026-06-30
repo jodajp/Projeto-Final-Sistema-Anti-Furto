@@ -22,13 +22,20 @@ def build_metrics_by_day(day: Optional[str], db: Session):
         timestamp_field = func.coalesce(MetricaNodeModel.data_recebida, MetricaNodeModel.timestamp)
         rows = db.query(MetricaNodeModel).filter(timestamp_field >= start).filter(timestamp_field <= end).all()
 
-        hours = [0] * 24
+        # Agrupamos as pessoas detetadas por hora em memória
+        hourly_data = {h: [] for h in range(24)}
         for row in rows:
             active_time = row.data_recebida or row.timestamp
             if active_time is None:
                 continue
             hour_index = active_time.hour
-            hours[hour_index] += int(row.pessoas_detetadas or 0)
+            hourly_data[hour_index].append(row.pessoas_detetadas or 0)
+
+        # Calculamos o pico (máximo) para cada hora
+        hours = [0] * 24
+        for h in range(24):
+            if hourly_data[h]:
+                hours[h] = max(hourly_data[h]) # <-- Obtém o pico daquela hora
 
         return {
             "day": target_date.isoformat(),
@@ -42,7 +49,6 @@ def build_metrics_by_day(day: Optional[str], db: Session):
         raise HTTPException(status_code=400, detail="Formato de data inválido. Use YYYY-MM-DD.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 def build_zone_stats_by_day(day: Optional[str], db: Session):
     try:
