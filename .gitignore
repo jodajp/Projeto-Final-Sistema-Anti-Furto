@@ -22,3 +22,6 @@ Edge/models/hub/
 /Edge/Visualizar_Data/test_output
 
 /Metricas
+
+
+/Edge/Alertas/clips/*

@@ -122,6 +122,12 @@ class AutoClipExtractor:
             if verbose:
                 print(f"[AutoClipExtractor] Sessão iniciada para track {track_id} (timeout = {target_end_frame})")
                 
+    def encerra_tudo(self):
+        """Força o fecho de todas os clips abertos (ex: no fim do feed)."""
+        for track_id, session in list(self.sessions.items()):
+            self._fechar_sessao(session)
+        self.sessions.clear()
+
     def _fechar_sessao(self, session: RecordingSession):
         """Finaliza a sessão, renderiza o vídeo e liberta memória."""
         session.closed = True

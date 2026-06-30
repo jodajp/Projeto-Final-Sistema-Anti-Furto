@@ -710,6 +710,7 @@ class AntiTheftOrchestrator:
                         entidades, new_alert_text = self._processar_frame(keypoints, scores, frame.shape, timestamp)
                         
                     self.last_entidades = entidades
+                    self.last_detection = (keypoints, scores)
                     
                     # Persistência do texto do alerta no ecrã
                     if new_alert_text:
@@ -780,6 +781,9 @@ class AntiTheftOrchestrator:
         finally:
             cap.release()
             cv2.destroyAllWindows()
+            for handler in self.alert_handlers:
+                if hasattr(handler, 'encerra_tudo'):
+                    handler.encerra_tudo()
             self._print_summary()
             
             # Antes de fechar, garante que as métricas finais são salvas

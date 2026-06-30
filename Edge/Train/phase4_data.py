@@ -136,10 +136,18 @@ def _load_manual_samples(manifest_path: Path, sequence_length: int, limit: int) 
     if not manifest_entries:
         return samples
 
+    annotations_path = ROOT_DIR / "Edge" / "Train" / "annotations.json"
+    annotations = {}
+    if annotations_path.exists():
+        with open(annotations_path, 'r', encoding='utf-8') as f:
+            annotations = json.load(f)
+
     for entry in manifest_entries[:limit]:
         npz_path = Path(entry["npz_path"])
         if not npz_path.exists():
             continue
+            
+        vid_base = npz_path.parent.name
 
         with np.load(npz_path, allow_pickle=False) as data:
             if "normalized_keypoint" in data:
@@ -155,7 +163,64 @@ def _load_manual_samples(manifest_path: Path, sequence_length: int, limit: int) 
         if scores.ndim == 3:
             scores = scores[0]
 
-        for window_coords, window_scores in _select_windows(coords, scores, sequence_length):
+        total = int(coords.shape[0])
+        if total == 0:
+            continue
+            
+        windows = []
+        if vid_base in annotations and label == 1:
+            # Shoplifting with annotations
+            start_anno, end_anno = annotations[vid_base]
+            start_anno = max(0, min(start_anno, total - 1))
+            end_anno = max(0, min(end_anno, total))
+            
+            anno_len = end_anno - start_anno
+            if anno_len <= sequence_length:
+                center = start_anno + anno_len // 2
+                start_w = max(0, center - sequence_length // 2)
+                end_w = min(total, start_w + sequence_length)
+                if end_w - start_w < sequence_length:
+                    start_w = max(0, end_w - sequence_length)
+                    
+                c_win = coords[start_w:end_w]
+                s_win = scores[start_w:end_w]
+                if c_win.shape[0] < sequence_length:
+                    pad = sequence_length - c_win.shape[0]
+                    c_win = np.pad(c_win, ((0, pad), (0, 0), (0, 0)), mode="edge")
+                    s_win = np.pad(s_win, ((0, pad), (0, 0)), mode="edge")
+                windows.append((c_win, s_win))
+            else:
+                max_shoplifting_windows = 5
+                last_start = end_anno - sequence_length
+                if last_start <= start_anno:
+                    start_positions = [start_anno]
+                else:
+                    start_positions = np.linspace(start_anno, last_start, num=min(max_shoplifting_windows, last_start - start_anno + 1), dtype=int)
+                
+                seen = set()
+                for start_w in start_positions:
+                    start_w = int(start_w)
+                    if start_w in seen:
+                        continue
+                    seen.add(start_w)
+                    windows.append((coords[start_w:start_w+sequence_length], scores[start_w:start_w+sequence_length]))
+        else:
+            # Normal video (or unannotated)
+            if total <= sequence_length:
+                c_win = coords
+                s_win = scores
+                pad = sequence_length - total
+                if pad > 0:
+                    c_win = np.pad(c_win, ((0, pad), (0, 0), (0, 0)), mode="edge")
+                    s_win = np.pad(s_win, ((0, pad), (0, 0)), mode="edge")
+                windows.append((c_win, s_win))
+            else:
+                max_normal_windows = 15
+                step = max(10, (total - sequence_length) // max_normal_windows)
+                for start_w in range(0, total - sequence_length + 1, step):
+                    windows.append((coords[start_w:start_w+sequence_length], scores[start_w:start_w+sequence_length]))
+
+        for window_coords, window_scores in windows:
             if window_coords.shape != (sequence_length, 17, 2) or window_scores.shape != (sequence_length, 17):
                 continue
             source_name = npz_path.stem

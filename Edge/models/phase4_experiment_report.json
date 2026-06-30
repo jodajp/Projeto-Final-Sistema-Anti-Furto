@@ -1,64 +1,64 @@
 {
-  "config": {
-    "sequence_length": 60,
-    "manual_count": -1,
-    "retail_normal_count": 0,
-    "retail_suspicious_count": 0,
-    "batch_size": 8,
-    "epochs": 15,
-    "hidden_size": 128,
-    "attention_size": 64,
-    "learning_rate": 0.001,
-    "weight_decay": 0.0,
-    "val_ratio": 0.2,
-    "test_ratio": 0.2,
-    "augment": true,
-    "seed": 42,
-    "metric": "hprs",
-    "loss": "bce",
-    "focal_alpha": 0.25,
-    "focal_gamma": 2.0,
-    "patience": 10,
-    "dropout": 0.2,
-    "num_layers": 2,
-    "bidirectional": false
-  },
-  "sample_counts": {
-    "normal": 140,
-    "suspicious": 1416,
-    "total": 1556
-  },
-  "split_sizes": {
-    "train": 1016,
-    "val": 270,
-    "test": 270
-  },
-  "threshold": 0.3499999999999999,
-  "validation": {
-    "precision": 0.8484848484848485,
-    "recall": 0.9032258064516129,
-    "specificity": 0.8648648648648649,
-    "f1": 0.875,
-    "hprs": 0.8715953307392996,
-    "accuracy": 0.8823529411764706,
-    "tp": 28.0,
-    "tn": 32.0,
-    "fp": 5.0,
-    "fn": 3.0
-  },
-  "test": {
-    "precision": 0.9777777777777777,
-    "recall": 1.0,
-    "specificity": 0.0,
-    "f1": 0.9887640449438202,
-    "hprs": 0.0,
-    "accuracy": 0.9777777777777777,
-    "tp": 264.0,
-    "tn": 0.0,
-    "fp": 6.0,
-    "fn": 0.0,
-    "threshold": 0.3499999999999999
-  },
-  "save_path": "F:\\Github\\Projeto-Final-Sistema-Anti-Furto\\Edge\\models\\phase4_experiment_model.pth",
-  "onnx_path": "F:\\Github\\Projeto-Final-Sistema-Anti-Furto\\Edge\\models\\phase4_experiment_model.onnx"
+    "config":  {
+                   "sequence_length":  60,
+                   "manual_count":  -1,
+                   "retail_normal_count":  10,
+                   "retail_suspicious_count":  10,
+                   "batch_size":  8,
+                   "epochs":  40,
+                   "hidden_size":  64,
+                   "attention_size":  64,
+                   "learning_rate":  0.0005,
+                   "weight_decay":  0.0,
+                   "val_ratio":  0.2,
+                   "test_ratio":  0.2,
+                   "augment":  true,
+                   "seed":  42,
+                   "metric":  "hprs",
+                   "loss":  "bce",
+                   "focal_alpha":  0.25,
+                   "focal_gamma":  2.0,
+                   "patience":  10,
+                   "dropout":  0.2,
+                   "num_layers":  2,
+                   "bidirectional":  false
+               },
+    "sample_counts":  {
+                          "normal":  647,
+                          "suspicious":  445,
+                          "total":  1092
+                      },
+    "split_sizes":  {
+                        "train":  1071,
+                        "val":  12,
+                        "test":  9
+                    },
+    "threshold":  0.9,
+    "validation":  {
+                       "precision":  0.8928571428571429,
+                       "recall":  0.9259259259259259,
+                       "specificity":  0.918918918918919,
+                       "f1":  0.9090909090909091,
+                       "hprs":  0.9123434704830055,
+                       "accuracy":  0.921875,
+                       "tp":  25.0,
+                       "tn":  34.0,
+                       "fp":  3.0,
+                       "fn":  2.0
+                   },
+    "test":  {
+                 "precision":  0.0,
+                 "recall":  0.0,
+                 "specificity":  1.0,
+                 "f1":  0.0,
+                 "hprs":  0.0,
+                 "accuracy":  0.6666666666666666,
+                 "tp":  0.0,
+                 "tn":  6.0,
+                 "fp":  0.0,
+                 "fn":  3.0,
+                 "threshold":  0.9249999999999999
+             },
+    "save_path":  "F:\\Github\\Projeto-Final-Sistema-Anti-Furto\\Edge\\models\\phase4_experiment_model.pth",
+    "onnx_path":  "F:\\Github\\Projeto-Final-Sistema-Anti-Furto\\Edge\\models\\phase4_experiment_model.onnx"
 }

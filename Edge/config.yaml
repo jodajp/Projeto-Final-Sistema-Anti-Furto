@@ -30,6 +30,7 @@ activities:
   - enabled: true
     plugin: Atividades_Suspeitas.shoplifting_detector:ShopliftingActivityDetector
     params:
+      model_path: ./models/phase4_experiment_model.onnx
       seq_length: 60
       threshold: 0.35
       cooldown_frames: 60
@@ -66,8 +67,8 @@ alerts:
         largura: 640
         altura: 480
         fps: 30.0
-        pre_event_frames: 60
-        post_event_frames: 60
+        pre_event_frames: 90
+        post_event_frames: 300
 
 visualization:
   enabled: true

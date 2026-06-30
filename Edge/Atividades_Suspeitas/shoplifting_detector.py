@@ -27,7 +27,6 @@ class ShopliftingActivityDetector(BaseActivity):
         model_file = Path(model_path).expanduser().resolve()
         
         # Try to load calibrated threshold dynamically from report json if present
-        calibrated_threshold = None
         report_candidates = [
             model_file.parent / "phase4_experiment_report.json",
             model_file.with_name(model_file.stem + "_report.json"),
@@ -40,16 +39,11 @@ class ShopliftingActivityDetector(BaseActivity):
                     with open(r_path, 'r', encoding='utf-8') as f:
                         report_data = json.load(f)
                     if "threshold" in report_data:
-                        calibrated_threshold = float(report_data["threshold"])
-                        print(f"[ShopliftingActivityDetector] Loaded calibrated threshold {calibrated_threshold:.3f} from {r_path.name}")
+                        threshold = float(report_data["threshold"])
+                        print(f"[ShopliftingActivityDetector] Loaded calibrated threshold {threshold:.3f} from {r_path.name}")
                         break
                 except Exception:
                     pass
-                    
-        # temporario
-        if calibrated_threshold is not None:
-            # Enforce a strict minimum threshold to prevent false positive storms
-            threshold = max(calibrated_threshold, 0.50)
 
         super().__init__("shoplifting_ml", threshold=threshold)
         self.seq_length = seq_length
