@@ -1,5 +1,5 @@
 """
-Temporal Pose Filter — Research-Grade Edition
+Temporal Pose Filter
 ==============================================
 
 Architecture:
@@ -81,7 +81,7 @@ class AdaptiveFilterState:
 
 class TemporalPoseFilter:
     """
-    Research-grade temporal filter for 17-point COCO skeleton with:
+    Temporal filter for 17-point COCO skeleton with:
     - Confidence-weighted 1€ adaptive smoothing
     - Kinematic chain occlusion prediction
     - Clean 3-state machine (TRACKING / OCCLUDED / LOST)
@@ -192,6 +192,20 @@ class TemporalPoseFilter:
         self.last_constraint_violations = 0
         self.state: Optional[AdaptiveFilterState] = None
 
+        # --- Vectorization pre-computed arrays ---
+        self.kinematic_children_arr = np.array(list(self.CHILD_TO_PARENT.keys()))
+        self.kinematic_parents_arr = np.array(list(self.CHILD_TO_PARENT.values()))
+        
+        self.all_kinematic_parents = np.arange(17)
+        for c, p in self.CHILD_TO_PARENT.items():
+            self.all_kinematic_parents[c] = p
+            
+        self.lvl1_nodes = np.array([LEFT_ELBOW, RIGHT_ELBOW, LEFT_KNEE, RIGHT_KNEE])
+        self.lvl2_nodes = np.array([LEFT_WRIST, RIGHT_WRIST, LEFT_ANKLE, RIGHT_ANKLE])
+        
+        self.head_mask = np.zeros(17, dtype=bool)
+        self.head_mask[list(self.HEAD_KEYPOINTS)] = True
+
     # ═══════════════════════════════════════════════════════════════════
     # HELPERS
     # ═══════════════════════════════════════════════════════════════════
@@ -199,7 +213,7 @@ class TemporalPoseFilter:
     @staticmethod
     def _smoothing_factor(t_e: float, cutoff) -> np.ndarray:
         """1€ smoothing factor α = r / (r + 1), r = 2π·fc·te."""
-        r = 2.0 * math.pi * t_e * cutoff
+        r = 2.0 * np.pi * t_e * cutoff
         return r / (r + 1.0)
 
     def _get_person_scale(self, kpts: np.ndarray) -> float:
@@ -218,8 +232,7 @@ class TemporalPoseFilter:
         out = scores.copy()
         for parent, children in self.SKELETON_TREE.items():
             if out[parent] < self.occlusion_confidence_threshold:
-                for child in children:
-                    out[child] *= 0.6
+                out[children] *= 0.6
         return out
 
     def _enforce_limb_lengths(
@@ -236,15 +249,27 @@ class TemporalPoseFilter:
         max_len    = scale * self.limb_scale_max
         violations = np.zeros(17, dtype=bool)
 
-        for parent, child in self.LIMB_PAIRS[:8]:  # arms + legs only
-            vec    = pos[child] - pos[parent]
-            length = float(np.linalg.norm(vec))
-            if length <= 1e-6 or length <= max_len:
-                continue
-            pos[child]    = pos[parent] + vec * (max_len / length)
-            overshoot     = min(length / max_len - 1.0, 1.0)
-            scores[child] = max(0.0, scores[child] * (1.0 - 0.6 * overshoot))
-            violations[parent] = violations[child] = True
+        parents = self.limb_pairs_arr[:8, 0]
+        children = self.limb_pairs_arr[:8, 1]
+        
+        vecs = pos[children] - pos[parents]
+        lengths = np.linalg.norm(vecs, axis=1)
+        
+        invalid = (lengths > max_len) & (lengths > 1e-6)
+        
+        if invalid.any():
+            inv_p = parents[invalid]
+            inv_c = children[invalid]
+            inv_vecs = vecs[invalid]
+            inv_len = lengths[invalid]
+            
+            pos[inv_c] = pos[inv_p] + inv_vecs * (max_len / inv_len)[:, None]
+            
+            overshoot = np.clip(inv_len / max_len - 1.0, 0.0, 1.0)
+            scores[inv_c] = np.maximum(0.0, scores[inv_c] * (1.0 - 0.6 * overshoot))
+            
+            violations[inv_p] = True
+            violations[inv_c] = True
 
         return pos, scores, predicted, violations
 
@@ -303,10 +328,6 @@ class TemporalPoseFilter:
             is_head[h] = True
 
         # ── Body motion speed (CoM velocity) ─────────────────────────
-        # Compute how fast the body's centre of mass is moving this frame.
-        # When the person turns, ALL visible joints translate quickly.
-        # We use this to add extra beta (open the filter wider) for all joints
-        # so arms don't lag behind during body rotations.
         valid_vis = st.is_visible
         if valid_vis.any():
             valid_pos = st.position[valid_vis]  # (N, 2)
@@ -314,117 +335,121 @@ class TemporalPoseFilter:
             body_speed = float(np.mean(np.linalg.norm(valid_kpt - valid_pos, axis=1)))
         else:
             body_speed = 0.0
-        # Extra beta is proportional to how far above threshold we are
+        
         body_extra_beta = max(0.0, body_speed - self.body_motion_threshold) * self.body_motion_beta
 
         # ════════════════════════════════════════════════════════
-        # PASS 1 — TRACKING joints
+        # PASS 1 — TRACKING joints (Vectorized)
         # ════════════════════════════════════════════════════════
-        for idx in range(17):
-            if not st.is_visible[idx]:
-                continue
-
-            if reentry[idx]:
-                # Hot-start: seed at current detector position to avoid blending
-                # from a potentially stale position stored before occlusion.
-                st.position[idx]      = kpts[idx]
-                st.dx_hat[idx]        = np.zeros(2)
-                st.state_code[idx]    = TRACKING
-                st.occluded_frames[idx] = 0
-                out_pos[idx]          = kpts[idx]
-                out_score[idx]        = raw_s[idx]
-                st.last_conf[idx]     = raw_s[idx]
-                continue
-
-            # ── Confidence-weighted 1€ filter with body-motion boost ───
-            conf_trust = float(raw_s[idx]) ** self.conf_trust_power
-
-            raw_dx  = (kpts[idx] - st.position[idx]) / t_e
+        tracking_mask = st.is_visible & ~reentry
+        
+        # Hot-start for reentry
+        if reentry.any():
+            st.position[reentry] = kpts[reentry]
+            st.dx_hat[reentry] = 0.0
+            st.state_code[reentry] = TRACKING
+            st.occluded_frames[reentry] = 0
+            out_pos[reentry] = kpts[reentry]
+            out_score[reentry] = raw_s[reentry]
+            st.last_conf[reentry] = raw_s[reentry]
+            
+        if tracking_mask.any():
+            conf_trust = raw_s[tracking_mask] ** self.conf_trust_power
+            
+            raw_dx = (kpts[tracking_mask] - st.position[tracking_mask]) / t_e
             alpha_d = self._smoothing_factor(t_e, self.d_cutoff)
-            dx_hat  = alpha_d * raw_dx + (1.0 - alpha_d) * st.dx_hat[idx]
-            st.dx_hat[idx] = dx_hat
-
-            speed  = float(np.linalg.norm(dx_hat))
-            # Per-joint beta * global body-motion boost = fast during turns, smooth when still
-            effective_beta = (self.beta * self._joint_beta_mult[idx]) + body_extra_beta
+            dx_hat = alpha_d * raw_dx + (1.0 - alpha_d) * st.dx_hat[tracking_mask]
+            st.dx_hat[tracking_mask] = dx_hat
+            
+            speed = np.linalg.norm(dx_hat, axis=1)
+            effective_beta = (self.beta * self._joint_beta_mult[tracking_mask]) + body_extra_beta
             cutoff = self.min_cutoff + effective_beta * speed
-
+            
             alpha_base = self._smoothing_factor(t_e, cutoff)
-            alpha = float(alpha_base) * conf_trust + 0.02  # 2% floor
-
-            out_pos[idx]   = alpha * kpts[idx] + (1.0 - alpha) * st.position[idx]
-            out_score[idx] = raw_s[idx]
-
-            st.state_code[idx]      = TRACKING
-            st.occluded_frames[idx] = 0
-            st.last_conf[idx]       = raw_s[idx]
+            alpha = alpha_base * conf_trust + 0.02
+            alpha = alpha[:, None]  # broadcast to (N, 2)
+            
+            out_pos[tracking_mask] = alpha * kpts[tracking_mask] + (1.0 - alpha) * st.position[tracking_mask]
+            out_score[tracking_mask] = raw_s[tracking_mask]
+            
+            st.state_code[tracking_mask] = TRACKING
+            st.occluded_frames[tracking_mask] = 0
+            st.last_conf[tracking_mask] = raw_s[tracking_mask]
 
         # ── Update kinematic offsets for all TRACKING pairs ───────────
-        for child_idx, parent_idx in self.CHILD_TO_PARENT.items():
-            if st.is_visible[child_idx] and st.is_visible[parent_idx]:
-                new_offset = out_pos[child_idx] - out_pos[parent_idx]
-                new_rel_dx = new_offset - st.rel_offset[child_idx]
-                # Smooth relative velocity to avoid single-frame noise spikes
-                alpha_rd = self._smoothing_factor(t_e, self.d_cutoff * 0.5)
-                st.rel_dx[child_idx]     = (
-                    alpha_rd * new_rel_dx + (1.0 - alpha_rd) * st.rel_dx[child_idx]
-                )
-                st.rel_offset[child_idx] = new_offset
+        c_arr = self.kinematic_children_arr
+        p_arr = self.kinematic_parents_arr
+        valid_kin = st.is_visible[c_arr] & st.is_visible[p_arr]
+        
+        if valid_kin.any():
+            c_idx = c_arr[valid_kin]
+            p_idx = p_arr[valid_kin]
+            
+            new_offset = out_pos[c_idx] - out_pos[p_idx]
+            new_rel_dx = new_offset - st.rel_offset[c_idx]
+            alpha_rd = self._smoothing_factor(t_e, self.d_cutoff * 0.5)
+            
+            st.rel_dx[c_idx] = alpha_rd * new_rel_dx + (1.0 - alpha_rd) * st.rel_dx[c_idx]
+            st.rel_offset[c_idx] = new_offset
 
         # ════════════════════════════════════════════════════════
-        # PASS 2 — OCCLUDED / LOST joints (topological order)
+        # PASS 2 — OCCLUDED / LOST joints (Vectorized)
         # ════════════════════════════════════════════════════════
-        for idx in range(17):
-            if st.is_visible[idx]:
-                continue
+        not_visible = ~st.is_visible
+        
+        invalid_head = not_visible & self.head_mask & self.disable_head_prediction
+        if invalid_head.any():
+            st.state_code[invalid_head] = LOST
+            st.occluded_frames[invalid_head] = self.max_occlusion_frames + 1
+            st.position[invalid_head] = np.nan
+            st.dx_hat[invalid_head] = 0.0
+            out_pos[invalid_head] = np.nan
+            out_score[invalid_head] = 0.0
+            
+        nan_pos = not_visible & np.isnan(st.position).any(axis=1) & ~invalid_head
+        if nan_pos.any():
+            st.state_code[nan_pos] = LOST
+            st.occluded_frames[nan_pos] = self.max_occlusion_frames + 1
+            out_pos[nan_pos] = np.nan
+            out_score[nan_pos] = 0.0
 
-            # Head keypoints: never predict — drop to NaN
-            if is_head[idx] and self.disable_head_prediction:
-                st.state_code[idx]       = LOST
-                st.occluded_frames[idx]  = self.max_occlusion_frames + 1
-                st.position[idx]         = np.full(2, np.nan)
-                st.dx_hat[idx]           = np.zeros(2)
-                out_pos[idx]             = np.full(2, np.nan)
-                out_score[idx]           = 0.0
-                continue
+        proc_mask = not_visible & ~invalid_head & ~nan_pos
+        st.occluded_frames[proc_mask] += 1
+        
+        lost_mask = proc_mask & (st.occluded_frames > self.max_occlusion_frames)
+        if lost_mask.any():
+            st.state_code[lost_mask] = LOST
+            out_pos[lost_mask] = st.position[lost_mask]
+            out_score[lost_mask] = 0.0
+            predicted[lost_mask] = False
+            
+        occ_mask = proc_mask & (st.occluded_frames <= self.max_occlusion_frames)
+        if occ_mask.any():
+            st.state_code[occ_mask] = OCCLUDED
+            predicted[occ_mask] = True
+            
+            root_mask = occ_mask.copy()
+            root_mask[self.kinematic_children_arr] = False
+            
+            if root_mask.any():
+                out_pos[root_mask] = st.position[root_mask] + st.dx_hat[root_mask]
+                st.dx_hat[root_mask] *= self.velocity_damping
+                
+            for lvl_nodes in [self.lvl1_nodes, self.lvl2_nodes]:
+                lvl_mask = occ_mask.copy()
+                lvl_mask_idx = [i for i in range(17) if i not in lvl_nodes]
+                lvl_mask[lvl_mask_idx] = False
+                
+                if lvl_mask.any():
+                    st.rel_offset[lvl_mask] += st.rel_dx[lvl_mask]
+                    st.rel_dx[lvl_mask] *= self.rel_vel_damping
+                    
+                    parents_of_lvl = self.all_kinematic_parents[lvl_mask]
+                    out_pos[lvl_mask] = out_pos[parents_of_lvl] + st.rel_offset[lvl_mask]
+                    st.dx_hat[lvl_mask] *= self.velocity_damping
 
-            # If we have no valid position to predict from, mark LOST
-            if np.isnan(st.position[idx]).any():
-                st.state_code[idx]       = LOST
-                st.occluded_frames[idx]  = self.max_occlusion_frames + 1
-                out_pos[idx]             = np.full(2, np.nan)
-                out_score[idx]           = 0.0
-                continue
-
-            st.occluded_frames[idx] += 1
-
-            if st.occluded_frames[idx] > self.max_occlusion_frames:
-                # Window expired → mark LOST, expose last known position quietly
-                st.state_code[idx] = LOST
-                out_pos[idx]       = st.position[idx]
-                out_score[idx]     = 0.0
-                predicted[idx]     = False
-            else:
-                st.state_code[idx] = OCCLUDED
-                predicted[idx]     = True
-
-                if idx in self.CHILD_TO_PARENT:
-                    # ── Kinematic prediction relative to parent ──────
-                    parent_idx = self.CHILD_TO_PARENT[idx]
-                    # Advance relative offset by its own smoothed velocity
-                    st.rel_offset[idx] = st.rel_offset[idx] + st.rel_dx[idx]
-                    st.rel_dx[idx]     = st.rel_dx[idx] * self.rel_vel_damping
-                    predicted_pos      = out_pos[parent_idx] + st.rel_offset[idx]
-                else:
-                    # Root joint (shoulder/hip): absolute velocity prediction
-                    predicted_pos = st.position[idx] + st.dx_hat[idx]
-
-                st.dx_hat[idx] = st.dx_hat[idx] * self.velocity_damping
-                out_pos[idx]   = predicted_pos
-
-                # Exponential decay: conf(t) = last_conf * decay^frames_occluded
-                t_occ = st.occluded_frames[idx]
-                out_score[idx] = max(0.0, st.last_conf[idx] * (self.occlusion_conf_decay ** t_occ))
+            t_occ = st.occluded_frames[occ_mask]
+            out_score[occ_mask] = np.maximum(0.0, st.last_conf[occ_mask] * (self.occlusion_conf_decay ** t_occ))
 
         # ════════════════════════════════════════════════════════
         # POST-PROCESSING
